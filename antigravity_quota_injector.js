@@ -506,6 +506,7 @@
       previewGradients: 'linear-gradient(135deg, #00f0ff, #6366f1)',
       isDark: true,
       workspaceBg: '#070b14',
+      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(0, 240, 255, 0.16) 0%, rgba(14, 28, 54, 0.72) 42%, #080c14 85%)',
       workspaceSidebar: '#04070d',
       workspaceInputBg: '#0c1322',
       workspaceBorder: 'rgba(56, 189, 248, 0.16)',
@@ -545,6 +546,7 @@
       previewGradients: 'linear-gradient(135deg, #ff70a6, #ffd670, #c084fc)',
       isDark: true,
       workspaceBg: '#160b16',
+      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(255, 112, 166, 0.18) 0%, rgba(58, 22, 48, 0.72) 42%, #160b16 85%)',
       workspaceSidebar: '#0e060e',
       workspaceInputBg: '#221024',
       workspaceBorder: 'rgba(255, 112, 166, 0.22)',
@@ -584,6 +586,7 @@
       previewGradients: 'linear-gradient(135deg, #4285f4, #f59e0b)',
       isDark: true,
       workspaceBg: '#101114',
+      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(66, 133, 244, 0.16) 0%, rgba(24, 30, 48, 0.72) 42%, #101114 85%)',
       workspaceSidebar: '#0c0d10',
       workspaceInputBg: '#16181d',
       workspaceBorder: 'rgba(255, 255, 255, 0.08)',
@@ -623,6 +626,7 @@
       previewGradients: 'linear-gradient(135deg, #10b981, #00ff9d)',
       isDark: true,
       workspaceBg: '#040f0c',
+      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(16, 185, 129, 0.18) 0%, rgba(12, 44, 26, 0.72) 42%, #040f0c 85%)',
       workspaceSidebar: '#020806',
       workspaceInputBg: '#081d17',
       workspaceBorder: 'rgba(16, 185, 129, 0.16)',
@@ -662,6 +666,7 @@
       previewGradients: 'linear-gradient(135deg, #ffffff, #94a3b8)',
       isDark: true,
       workspaceBg: '#0d0f14',
+      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(255, 255, 255, 0.12) 0%, rgba(32, 38, 52, 0.65) 42%, #0d0f14 85%)',
       workspaceSidebar: '#090a0d',
       workspaceInputBg: '#141720',
       workspaceBorder: 'rgba(255, 255, 255, 0.1)',
@@ -701,6 +706,7 @@
       previewGradients: 'linear-gradient(135deg, #fb923c, #f43f5e)',
       isDark: true,
       workspaceBg: '#12080d',
+      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(251, 146, 60, 0.18) 0%, rgba(55, 26, 10, 0.72) 42%, #12080d 85%)',
       workspaceSidebar: '#0a0407',
       workspaceInputBg: '#1b0d14',
       workspaceBorder: 'rgba(251, 146, 60, 0.18)',
@@ -826,7 +832,7 @@
     `;
 
     let style = document.getElementById('aqm-app-workspace-theme');
-    if (!enabled || theme.id === 'gravity') {
+    if (!enabled) {
       if (style) style.remove();
       return;
     }
@@ -837,9 +843,9 @@
     }
 
     style.textContent = `
-      :root, body, .theme-standalone {
-        --background: ${theme.workspaceBg || '#101010'} !important;
-        --color-background: ${theme.workspaceBg || '#101010'} !important;
+      :root, body, .theme-standalone, div.h-screen.w-screen {
+        --background: transparent !important;
+        --color-background: transparent !important;
         --content: ${theme.workspaceInputBg || '#141414'} !important;
         --border: ${theme.workspaceBorder || 'rgba(255,255,255,0.06)'} !important;
         --card-border: ${theme.workspaceCardBorder || 'rgba(255,255,255,0.1)'} !important;
@@ -849,22 +855,39 @@
         --color-code: ${theme.formulaColor || theme.accent} !important;
         --code-foreground: ${theme.formulaColor || theme.accent} !important;
         --font-sans: ${fullFamily} !important;
+        background-color: ${theme.workspaceBg || '#080c14'} !important;
+        background-image: ${theme.bgGradient || 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(0, 240, 255, 0.16) 0%, rgba(14, 28, 54, 0.72) 42%, #080c14 85%)'} !important;
+        background-attachment: fixed !important;
+        background-size: cover !important;
+        background-repeat: no-repeat !important;
       }
       body {
-        background-color: ${theme.workspaceBg || '#101010'} !important;
+        background-color: ${theme.workspaceBg || '#080c14'} !important;
+        background-image: ${theme.bgGradient || 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(0, 240, 255, 0.16) 0%, rgba(14, 28, 54, 0.72) 42%, #080c14 85%)'} !important;
+        background-attachment: fixed !important;
+        background-size: cover !important;
         font-family: ${fullFamily} !important;
       }
+      .bg-background, div.bg-background, main, [class*="main-content"] {
+        background: transparent !important;
+        background-color: transparent !important;
+      }
       .bg-sidebar {
-        background-color: ${theme.workspaceSidebar || '#161616'} !important;
+        background: ${theme.workspaceSidebar ? theme.workspaceSidebar + 'd8' : 'rgba(6, 9, 16, 0.85)'} !important;
+        backdrop-filter: blur(20px) !important;
+        -webkit-backdrop-filter: blur(20px) !important;
         border-right: 1px solid ${theme.workspaceBorder || 'rgba(255,255,255,0.06)'} !important;
       }
       header, [class*="titlebar"], [class*="Header"] {
-        background-color: ${theme.workspaceBg || '#101010'} !important;
+        background: ${theme.workspaceSidebar ? theme.workspaceSidebar + 'c0' : 'rgba(6, 9, 16, 0.75)'} !important;
+        backdrop-filter: blur(16px) !important;
+        -webkit-backdrop-filter: blur(16px) !important;
+        border-bottom: 1px solid ${theme.workspaceBorder || 'rgba(255,255,255,0.06)'} !important;
       }
-      .no-focus-agent-input {
+      .no-focus-agent-input, textarea, [class*="chat-input"], [class*="Composer"] {
         background-color: ${theme.workspaceInputBg || '#141414'} !important;
-        border: 1px solid ${theme.workspaceBorder || 'rgba(255,255,255,0.1)'} !important;
-        box-shadow: 0 6px 25px rgba(0, 0, 0, 0.3), 0 0 20px ${theme.chipBg} !important;
+        border: 1px solid ${theme.cardBorder || 'rgba(0, 240, 255, 0.35)'} !important;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), 0 0 15px ${theme.chipBg || 'rgba(0, 240, 255, 0.25)'} !important;
       }
 
       /* 1. Universal Chat, Prose, Markdown, Inputs & Prompts Typography */
