@@ -586,6 +586,16 @@ def launch_chatgpt(instance_num=1, new_window=False, workspace_path=None):
             except Exception:
                 pass
 
+    if sys.platform == "win32" and instance_num == 1 and not new_window:
+        try:
+            subprocess.run(
+                ["powershell", "-NoProfile", "-Command", f"Start-Process -FilePath 'shell:AppsFolder\\OpenAI.Codex_2p2nqsd0c76g0!App' -ArgumentList '--remote-debugging-port={port}'"],
+                timeout=5
+            )
+            return True, f"Launched ChatGPT Instance 1 via Windows Application Manager with DevTools port {port}"
+        except Exception:
+            pass
+
     exe = get_chatgpt_exe_path()
     if not exe:
         codex_cli = get_codex_cli_path()
@@ -601,7 +611,11 @@ def launch_chatgpt(instance_num=1, new_window=False, workspace_path=None):
         "--enable-features=DevToolsWebMCPSupport"
     ]
 
-    if instance_num == 2:
+    default_user_data = Path(os.environ.get("APPDATA", "")) / "Codex" / "web" / "Codex"
+    if instance_num == 1:
+        if default_user_data.exists():
+            cmd.append(f'--user-data-dir={default_user_data}')
+    elif instance_num == 2:
         INSTANCE2_USER_DATA.mkdir(parents=True, exist_ok=True)
         cmd.append(f'--user-data-dir={INSTANCE2_USER_DATA}')
 
@@ -610,6 +624,8 @@ def launch_chatgpt(instance_num=1, new_window=False, workspace_path=None):
 
     if workspace_path:
         cmd.append(str(workspace_path))
+    else:
+        cmd.append("codex://threads/new")
 
     try:
         app_dir = str(Path(exe).parent)

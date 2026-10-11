@@ -213,11 +213,13 @@ async def target_worker(t_id, ws_url):
                 }))
 
             # Guardian task: periodically checks HUD presence and keeps IPC binding alive
+            guardian_ids = set()
             async def guardian():
                 while True:
                     await asyncio.sleep(2.5)
                     try:
                         chk_id = int(time.time() * 1000) % 1000000
+                        guardian_ids.add(chk_id)
                         await ws.send(json.dumps({
                             "id": chk_id,
                             "method": "Runtime.evaluate",
@@ -226,7 +228,8 @@ async def target_worker(t_id, ws_url):
                                 "returnByValue": True
                             }
                         }))
-                    except Exception:
+                    except Exception as e:
+                        logger.debug(f"[CPE WORKER] Guardian exception: {e}")
                         break
 
             guardian_task = asyncio.create_task(guardian())
@@ -240,12 +243,15 @@ async def target_worker(t_id, ws_url):
                         continue
 
                     method = msg.get("method")
+                    msg_id = msg.get("id")
+
                     # Handle native IPC
                     if method == "Runtime.bindingCalled" and msg.get("params", {}).get("name") == "__cpe_daemon_ipc":
                         await handle_target_ipc(ws, raw)
 
-                    # Re-assert binding and re-inject on navigation / context rebuild
-                    elif method in ("Page.frameNavigated", "Runtime.executionContextCreated", "Page.loadEventFired"):
+                    # Re-assert binding and re-inject on true document navigation / reload only
+                    # Note: Excluded Runtime.executionContextCreated because ChatGPT creates dozens of worker contexts during chat!
+                    elif method in ("Page.frameNavigated", "Page.loadEventFired"):
                         await ws.send(json.dumps({"id": 80, "method": "Runtime.addBinding", "params": {"name": "__cpe_daemon_ipc"}}))
                         fresh_script = load_injector_script()
                         if fresh_script:
@@ -255,15 +261,38 @@ async def target_worker(t_id, ws_url):
                                 "params": {"expression": fresh_script, "userGesture": True}
                             }))
 
-                    # Guardian response check
-                    elif "result" in msg and "result" in msg.get("result", {}):
+                    # Guardian response check: match any sent guardian check ID
+                    elif msg_id in guardian_ids and "result" in msg and "result" in msg.get("result", {}):
+                        guardian_ids.discard(msg_id)
                         val = msg["result"]["result"].get("value")
-                        if val is True and not hud_verified:
-                            hud_verified = True
-                            logger.info(f"[CPE WORKER] HUD pill verified active and present on target {t_id}")
+                        if val is True:
+                            if not hud_verified:
+                                hud_verified = True
+                                logger.info(f"[CPE WORKER] HUD pill verified active and present on target {t_id}")
                         elif val is False:
                             hud_verified = False
-                            logger.info(f"[CPE WORKER] HUD pill missing from target {t_id}, re-injecting suite...")
+                            logger.info(f"[CPE WORKER] HUD pill missing on target {t_id}, restoring HUD...")
+                            # Lightweight restore: don't evaluate 450 KB, just call __cpe_render_hud()
+                            restore_expr = """
+                            (() => {
+                                if (typeof window.__cpe_render_hud === 'function') {
+                                    window.__cpe_render_hud();
+                                    return true;
+                                }
+                                return false;
+                            })()
+                            """
+                            await ws.send(json.dumps({
+                                "id": 85,
+                                "method": "Runtime.evaluate",
+                                "params": {"expression": restore_expr, "returnByValue": True}
+                            }))
+
+                    # If lightweight restore failed because suite wasn't loaded at all, do full injection
+                    elif msg_id == 85 and "result" in msg and "result" in msg.get("result", {}):
+                        restored = msg["result"]["result"].get("value")
+                        if not restored:
+                            logger.info(f"[CPE WORKER] Full suite re-injection needed on target {t_id}")
                             fresh_script = load_injector_script()
                             if fresh_script:
                                 await ws.send(json.dumps({"id": 82, "method": "Runtime.addBinding", "params": {"name": "__cpe_daemon_ipc"}}))
@@ -381,6 +410,16 @@ if __name__ == "__main__":
         count = asyncio.run(scan_and_inject_once(ports=args.ports, force=args.force))
         print(f"Injected into {count} targets.")
     else:
+        # Prevent multiple background daemons from running concurrently
+        lock_file_path = CURRENT_DIR / "chatgpt_cdp_daemon.lock"
+        try:
+            lock_f = open(lock_file_path, "a+")
+            import msvcrt
+            msvcrt.locking(lock_f.fileno(), msvcrt.LK_NBLCK, 1)
+        except Exception:
+            logger.info("Another ChatGPT CDP Daemon is already running. Exiting.")
+            sys.exit(0)
+
         try:
             asyncio.run(daemon_loop(ports=args.ports))
         except KeyboardInterrupt:

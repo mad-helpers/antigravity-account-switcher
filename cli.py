@@ -524,6 +524,10 @@ def main():
     if first in ('--gui', 'gui'):
         return cmd_gui()
 
+    if first in ('--ide-theme', 'ide-theme', '--setup-ide', 'setup-ide'):
+        import setup_ide_theme
+        return 0 if setup_ide_theme.setup_ide_theme() else 1
+
     # If first argument looks like an email or known account or instance alias, treat as switch
     matched = find_account_key(filtered_args[0])
     if matched:

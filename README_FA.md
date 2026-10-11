@@ -123,6 +123,7 @@ agy-quota --status-json        # خروجی جیسون جهت اتوماسیون
 agy-switch                     # باز کردن رابط گرافیکی پنل
 agy-switch --switch <email>    # سوئیچ آنی اکانت در سیستم‌عامل
 agy-switch --launch-instance 2 # اجرای نسخه مجزای پنجره دوم
+agy-switch --ide-theme         # اعمال دائمی فونت‌های فارسی (وزیرمتن/استعداد)، تم مدرن و راست‌چین در Antigravity IDE
 ```
 
 ---

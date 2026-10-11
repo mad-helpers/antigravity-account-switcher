@@ -41,6 +41,7 @@ venv/
 # App build cache
 *.tmp
 *.log
+*.lock
 
 # Antigravity agent configuration
 GEMINI.md

@@ -2,9 +2,11 @@
 Antigravity IDE Theme, Persian Fonts, Neon Glow & Live Customizer Suite
 Permanent installer for Antigravity IDE:
 - Embeds Vazirmatn, Estedad, Outfit WOFF2 fonts + Local Vazir/Vazirmatn support
-- Floating Draggable HUD Pill (Theme Customizer + Account Switcher) like ChatGPT Enhanced / GPT plugin
-- Live Interactive Theme & Neon Customization Modal (Cyberpunk, SynthWave, AMOLED, Midnight, Emerald, Sunset)
+- Floating Draggable HUD Pill (Theme Customizer + Account Switcher) like ChatGPT Enhanced
+- Live Interactive Theme & Neon Customization Modal (Cyberpunk, SynthWave, AMOLED, Midnight, Emerald, Sunset, Clean Dark)
 - High Neon Glow, Refined Glass & Subtle stroke options
+- Live instant preview on dropdown / slider change without reload
+- Status bar button & Global Hotkeys (Alt+T for Theme, Alt+A for Accounts)
 - Full Smart BiDi for Monaco Editor (Persian Markdown lines RTL, Code blocks LTR)
 - Universal Persian Typography & RTL for Antigravity Agent Chat & Prose
 - Updates product.json SHA-256 base64 checksums to eliminate corrupt installation warnings
@@ -17,6 +19,7 @@ import json
 import base64
 import hashlib
 import shutil
+import re
 from pathlib import Path
 
 # Fix console encoding on Windows
@@ -34,6 +37,7 @@ IDE_USER_SETTINGS = Path(os.getenv("APPDATA", str(HOME / "AppData" / "Roaming"))
 FONT_SOURCES = [
     Path(__file__).resolve().parent / "assets" / "fonts",
     HOME / ".gemini" / "antigravity" / "bin" / "assets" / "fonts",
+    IDE_APP_DIR / "out" / "vs" / "workbench" / "fonts",
 ]
 
 def find_font_file(filename):
@@ -76,8 +80,10 @@ def setup_ide_theme():
     for name, filename in font_files.items():
         src = find_font_file(filename)
         if src and src.exists():
-            shutil.copy2(src, fonts_dest_1 / filename)
-            shutil.copy2(src, fonts_dest_2 / filename)
+            if src != fonts_dest_1 / filename:
+                shutil.copy2(src, fonts_dest_1 / filename)
+            if src != fonts_dest_2 / filename:
+                shutil.copy2(src, fonts_dest_2 / filename)
             raw = src.read_bytes()
             font_b64[name] = base64.b64encode(raw).decode('ascii')
             print(f"✓ Copied {filename} ({len(raw)} bytes)")
@@ -89,7 +95,7 @@ def setup_ide_theme():
     estedad_b64 = font_b64.get("Estedad", "")
     outfit_b64 = font_b64.get("Outfit", "")
 
-    # 2. Build antigravity-custom-theme.css (Base foundational styles)
+    # 2. Build antigravity-custom-theme.css (Permanent Foundational Theme & Neon CSS)
     theme_css = f"""/* Antigravity IDE Permanent Modern Theme & Persian Typography Suite */
 /* Generated automatically by setup_ide_theme.py */
 
@@ -124,16 +130,510 @@ def setup_ide_theme():
        url('data:font/woff2;base64,{estedad_b64}') format('woff2');
 }}
 
-/* --- 2. Universal IDE Typography & Chrome Styling --- */
-:root {{
-  --vscode-font-family: 'Outfit', 'Vazirmatn', 'Vazirmatn UI', 'Vazir', 'Estedad', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif !important;
+/* --- 2. Color Palettes & Neon Themes --- */
+:root,
+[data-agy-theme="cyber"] {{
+  --agy-bg: #080c14;
+  --agy-bg-gradient: radial-gradient(ellipse 95% 70% at 50% -10%, rgba(0, 240, 255, 0.16) 0%, rgba(14, 28, 54, 0.72) 42%, #080c14 85%);
+  --agy-accent: #00f0ff;
+  --agy-accent-glow: 0 0 20px rgba(0, 240, 255, 0.55);
+  --agy-accent-soft: rgba(0, 240, 255, 0.15);
+  --agy-border: rgba(0, 240, 255, 0.32);
+  --agy-card: #0f1728;
+  --agy-card-border: rgba(0, 240, 255, 0.26);
+  --agy-sidebar: #060910;
+  --agy-composer-bg: rgba(15, 23, 42, 0.95);
+  --agy-text: #f1f5f9;
+  --vscode-font-family: 'Outfit', 'Vazirmatn', 'Vazirmatn UI', 'Vazir', 'Estedad', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
   --cpe-font: 'Outfit', 'Vazirmatn', 'Vazirmatn UI', 'Vazir', 'Estedad', sans-serif;
   --cpe-accent: #00f0ff;
   --cpe-accent-glow: 0 0 18px rgba(0, 240, 255, 0.55);
   --cpe-accent-soft: rgba(0, 240, 255, 0.15);
   --cpe-border: rgba(0, 240, 255, 0.32);
+  --vscode-editor-background: transparent !important;
+  --vscode-sideBar-background: transparent !important;
+  --vscode-sideBarTitle-background: transparent !important;
+  --vscode-sideBarSectionHeader-background: transparent !important;
+  --vscode-activityBar-background: rgba(6, 9, 16, 0.72) !important;
+  --vscode-titleBar-activeBackground: rgba(6, 9, 16, 0.72) !important;
+  --vscode-statusBar-background: rgba(6, 9, 16, 0.8) !important;
+  --vscode-editorGroupHeader-tabsBackground: transparent !important;
+  --vscode-editorGroupHeader-noTabsBackground: transparent !important;
+  --vscode-tab-activeBackground: rgba(255, 255, 255, 0.08) !important;
+  --vscode-tab-inactiveBackground: transparent !important;
+  --vscode-tab-border: transparent !important;
+  --vscode-tab-activeBorder: var(--agy-accent) !important;
+  --vscode-tab-activeBorderTop: transparent !important;
+  --vscode-focusBorder: var(--agy-accent) !important;
+  --vscode-button-background: var(--agy-accent) !important;
+  --vscode-button-foreground: #000000 !important;
+  --vscode-button-hoverBackground: var(--agy-accent) !important;
+  --vscode-menu-background: #0f1728 !important;
+  --vscode-menu-foreground: #f1f5f9 !important;
+  --vscode-menu-selectionBackground: var(--agy-accent-soft) !important;
+  --vscode-menu-selectionForeground: var(--agy-accent) !important;
+  --vscode-menu-selectionBorder: var(--agy-accent) !important;
+  --vscode-menu-separatorBackground: rgba(255, 255, 255, 0.1) !important;
+  --vscode-menu-border: var(--agy-border) !important;
+  --vscode-dropdown-background: #0f1728 !important;
+  --vscode-dropdown-foreground: #f1f5f9 !important;
+  --vscode-dropdown-border: var(--agy-border) !important;
 }}
 
+[data-agy-theme="synthwave"] {{
+  --agy-bg: #0d071a;
+  --agy-bg-gradient: radial-gradient(ellipse 95% 70% at 50% -10%, rgba(255, 0, 127, 0.18) 0%, rgba(42, 12, 64, 0.75) 42%, #0d071a 85%);
+  --agy-accent: #ff007f;
+  --agy-accent-glow: 0 0 22px rgba(255, 0, 127, 0.65);
+  --agy-accent-soft: rgba(255, 0, 127, 0.18);
+  --agy-border: rgba(255, 0, 127, 0.38);
+  --agy-card: #1a0d30;
+  --agy-card-border: rgba(255, 0, 127, 0.32);
+  --agy-sidebar: #080312;
+  --agy-composer-bg: rgba(24, 13, 46, 0.95);
+  --agy-text: #fff0f8;
+  --vscode-editor-background: transparent !important;
+  --vscode-sideBar-background: transparent !important;
+  --vscode-sideBarTitle-background: transparent !important;
+  --vscode-sideBarSectionHeader-background: transparent !important;
+  --vscode-activityBar-background: rgba(8, 3, 18, 0.75) !important;
+  --vscode-titleBar-activeBackground: rgba(8, 3, 18, 0.75) !important;
+  --vscode-statusBar-background: rgba(8, 3, 18, 0.8) !important;
+  --vscode-editorGroupHeader-tabsBackground: transparent !important;
+  --vscode-editorGroupHeader-noTabsBackground: transparent !important;
+  --vscode-tab-activeBackground: rgba(255, 255, 255, 0.08) !important;
+  --vscode-tab-inactiveBackground: transparent !important;
+  --vscode-focusBorder: var(--agy-accent) !important;
+  --vscode-button-background: var(--agy-accent) !important;
+  --vscode-button-foreground: #ffffff !important;
+  --vscode-button-hoverBackground: var(--agy-accent) !important;
+}}
+
+[data-agy-theme="amoled"] {{
+  --agy-bg: #000000;
+  --agy-bg-gradient: radial-gradient(ellipse 95% 70% at 50% -10%, rgba(56, 189, 248, 0.12) 0%, rgba(10, 22, 38, 0.5) 40%, #000000 80%);
+  --agy-accent: #38bdf8;
+  --agy-accent-glow: 0 0 16px rgba(56, 189, 248, 0.45);
+  --agy-accent-soft: rgba(255, 255, 255, 0.08);
+  --agy-border: rgba(255, 255, 255, 0.2);
+  --agy-card: #0d0d0d;
+  --agy-card-border: rgba(255, 255, 255, 0.16);
+  --agy-sidebar: #040404;
+  --agy-composer-bg: #080808;
+  --agy-text: #ffffff;
+  --vscode-editor-background: transparent !important;
+  --vscode-sideBar-background: transparent !important;
+  --vscode-sideBarTitle-background: transparent !important;
+  --vscode-sideBarSectionHeader-background: transparent !important;
+  --vscode-activityBar-background: rgba(4, 4, 4, 0.75) !important;
+  --vscode-titleBar-activeBackground: rgba(4, 4, 4, 0.75) !important;
+  --vscode-statusBar-background: rgba(4, 4, 4, 0.8) !important;
+  --vscode-editorGroupHeader-tabsBackground: transparent !important;
+  --vscode-editorGroupHeader-noTabsBackground: transparent !important;
+  --vscode-tab-activeBackground: rgba(255, 255, 255, 0.08) !important;
+  --vscode-tab-inactiveBackground: transparent !important;
+  --vscode-focusBorder: var(--agy-accent) !important;
+  --vscode-button-background: var(--agy-accent) !important;
+  --vscode-button-foreground: #000000 !important;
+  --vscode-button-hoverBackground: var(--agy-accent) !important;
+}}
+
+[data-agy-theme="midnight"] {{
+  --agy-bg: #0a0e1a;
+  --agy-bg-gradient: radial-gradient(ellipse 95% 70% at 50% -10%, rgba(129, 140, 248, 0.18) 0%, rgba(25, 32, 66, 0.75) 42%, #0a0e1a 85%);
+  --agy-accent: #818cf8;
+  --agy-accent-glow: 0 0 20px rgba(129, 140, 248, 0.55);
+  --agy-accent-soft: rgba(99, 102, 241, 0.16);
+  --agy-border: rgba(99, 102, 241, 0.3);
+  --agy-card: #12182c;
+  --agy-card-border: rgba(99, 102, 241, 0.26);
+  --agy-sidebar: #060912;
+  --agy-composer-bg: rgba(18, 24, 44, 0.95);
+  --agy-text: #f8fafc;
+  --vscode-editor-background: transparent !important;
+  --vscode-sideBar-background: transparent !important;
+  --vscode-sideBarTitle-background: transparent !important;
+  --vscode-sideBarSectionHeader-background: transparent !important;
+  --vscode-activityBar-background: rgba(6, 9, 18, 0.75) !important;
+  --vscode-titleBar-activeBackground: rgba(6, 9, 18, 0.75) !important;
+  --vscode-statusBar-background: rgba(6, 9, 18, 0.8) !important;
+  --vscode-editorGroupHeader-tabsBackground: transparent !important;
+  --vscode-editorGroupHeader-noTabsBackground: transparent !important;
+  --vscode-tab-activeBackground: rgba(255, 255, 255, 0.08) !important;
+  --vscode-tab-inactiveBackground: transparent !important;
+  --vscode-focusBorder: var(--agy-accent) !important;
+  --vscode-button-background: var(--agy-accent) !important;
+  --vscode-button-foreground: #000000 !important;
+  --vscode-button-hoverBackground: var(--agy-accent) !important;
+}}
+
+[data-agy-theme="emerald"] {{
+  --agy-bg: #06100a;
+  --agy-bg-gradient: radial-gradient(ellipse 95% 70% at 50% -10%, rgba(16, 185, 129, 0.18) 0%, rgba(12, 44, 26, 0.75) 42%, #06100a 85%);
+  --agy-accent: #10b981;
+  --agy-accent-glow: 0 0 20px rgba(16, 185, 129, 0.55);
+  --agy-accent-soft: rgba(16, 185, 129, 0.16);
+  --agy-border: rgba(16, 185, 129, 0.3);
+  --agy-card: #0c2014;
+  --agy-card-border: rgba(16, 185, 129, 0.26);
+  --agy-sidebar: #030805;
+  --agy-composer-bg: rgba(10, 26, 17, 0.95);
+  --agy-text: #ecfdf5;
+  --vscode-editor-background: transparent !important;
+  --vscode-sideBar-background: transparent !important;
+  --vscode-sideBarTitle-background: transparent !important;
+  --vscode-sideBarSectionHeader-background: transparent !important;
+  --vscode-activityBar-background: rgba(3, 8, 5, 0.75) !important;
+  --vscode-titleBar-activeBackground: rgba(3, 8, 5, 0.75) !important;
+  --vscode-statusBar-background: rgba(3, 8, 5, 0.8) !important;
+  --vscode-editorGroupHeader-tabsBackground: transparent !important;
+  --vscode-editorGroupHeader-noTabsBackground: transparent !important;
+  --vscode-tab-activeBackground: rgba(255, 255, 255, 0.08) !important;
+  --vscode-tab-inactiveBackground: transparent !important;
+  --vscode-focusBorder: var(--agy-accent) !important;
+  --vscode-button-background: var(--agy-accent) !important;
+  --vscode-button-foreground: #000000 !important;
+  --vscode-button-hoverBackground: var(--agy-accent) !important;
+}}
+
+[data-agy-theme="sunset"] {{
+  --agy-bg: #140c06;
+  --agy-bg-gradient: radial-gradient(ellipse 95% 70% at 50% -10%, rgba(245, 158, 11, 0.18) 0%, rgba(55, 26, 10, 0.75) 42%, #140c06 85%);
+  --agy-accent: #f59e0b;
+  --agy-accent-glow: 0 0 20px rgba(245, 158, 11, 0.55);
+  --agy-accent-soft: rgba(245, 158, 11, 0.16);
+  --agy-border: rgba(245, 158, 11, 0.3);
+  --agy-card: #24140b;
+  --agy-card-border: rgba(245, 158, 11, 0.26);
+  --agy-sidebar: #0a0502;
+  --agy-composer-bg: rgba(32, 18, 9, 0.95);
+  --agy-text: #fffbeb;
+  --vscode-editor-background: transparent !important;
+  --vscode-sideBar-background: transparent !important;
+  --vscode-sideBarTitle-background: transparent !important;
+  --vscode-sideBarSectionHeader-background: transparent !important;
+  --vscode-activityBar-background: rgba(10, 5, 2, 0.75) !important;
+  --vscode-titleBar-activeBackground: rgba(10, 5, 2, 0.75) !important;
+  --vscode-statusBar-background: rgba(10, 5, 2, 0.8) !important;
+  --vscode-editorGroupHeader-tabsBackground: transparent !important;
+  --vscode-editorGroupHeader-noTabsBackground: transparent !important;
+  --vscode-tab-activeBackground: rgba(255, 255, 255, 0.08) !important;
+  --vscode-tab-inactiveBackground: transparent !important;
+  --vscode-focusBorder: var(--agy-accent) !important;
+  --vscode-button-background: var(--agy-accent) !important;
+  --vscode-button-foreground: #000000 !important;
+  --vscode-button-hoverBackground: var(--agy-accent) !important;
+}}
+
+[data-agy-theme="clean_dark"] {{
+  --agy-bg: #0e1117;
+  --agy-bg-gradient: radial-gradient(ellipse 95% 70% at 50% -10%, rgba(56, 189, 248, 0.12) 0%, rgba(26, 32, 44, 0.7) 42%, #0e1117 85%);
+  --agy-accent: #38bdf8;
+  --agy-accent-glow: 0 0 14px rgba(56, 189, 248, 0.35);
+  --agy-accent-soft: rgba(56, 189, 248, 0.12);
+  --agy-border: rgba(255, 255, 255, 0.15);
+  --agy-card: #181b22;
+  --agy-card-border: rgba(255, 255, 255, 0.14);
+  --agy-sidebar: #0c0e12;
+  --agy-composer-bg: rgba(24, 27, 34, 0.94);
+  --agy-text: #f8fafc;
+  --vscode-editor-background: transparent !important;
+  --vscode-sideBar-background: transparent !important;
+  --vscode-sideBarTitle-background: transparent !important;
+  --vscode-sideBarSectionHeader-background: transparent !important;
+  --vscode-activityBar-background: rgba(12, 14, 18, 0.75) !important;
+  --vscode-titleBar-activeBackground: rgba(12, 14, 18, 0.75) !important;
+  --vscode-statusBar-background: rgba(12, 14, 18, 0.8) !important;
+  --vscode-editorGroupHeader-tabsBackground: transparent !important;
+  --vscode-editorGroupHeader-noTabsBackground: transparent !important;
+  --vscode-tab-activeBackground: rgba(255, 255, 255, 0.08) !important;
+  --vscode-tab-inactiveBackground: transparent !important;
+  --vscode-focusBorder: var(--agy-accent) !important;
+  --vscode-button-background: var(--agy-accent) !important;
+  --vscode-button-foreground: #000000 !important;
+  --vscode-button-hoverBackground: var(--agy-accent) !important;
+}}
+
+/* --- 3. Shell Background & Transparent Layers --- */
+html,
+body {{
+  background-color: var(--agy-bg) !important;
+  background-image: var(--agy-bg-gradient) !important;
+  background-attachment: scroll !important;
+  background-size: cover !important;
+  background-repeat: no-repeat !important;
+}}
+
+.monaco-workbench,
+#root,
+.jetski-root,
+#jetski-root {{
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+}}
+
+/* Secondary Sidebar (Auxiliary Bar) - where Agent panel lives */
+.monaco-workbench .part.auxiliarybar,
+.monaco-workbench .part.auxiliarybar > .content,
+.monaco-workbench .part.auxiliarybar .composite,
+.monaco-workbench .part.auxiliarybar .title,
+.monaco-workbench .part.auxiliarybar .pane-body,
+.monaco-workbench .part.auxiliarybar .pane-header,
+.monaco-workbench .part.auxiliarybar .pane,
+.monaco-workbench .part.auxiliarybar iframe,
+.monaco-workbench .part.auxiliarybar webview,
+.monaco-workbench .part.auxiliarybar .monaco-scrollable-element,
+.monaco-workbench .part.auxiliarybar .split-view-view {{
+  background: transparent !important;
+  background-color: transparent !important;
+}}
+
+/* Context Menus, Dropdown Menus & Modals - Strictly Top Stacking & Solid Surface */
+.context-view,
+.context-view.fixed,
+.monaco-menu-container,
+.monaco-menu,
+.menubar-menu-items,
+.menubar-menu-items-holder,
+.menubar .menubar-menu-items-holder,
+.monaco-dropdown,
+.monaco-dropdown-menu,
+.monaco-action-bar.vertical {{
+  position: absolute !important;
+  z-index: 2147483640 !important;
+  background-color: #0f1728 !important;
+  background: #0f1728 !important;
+  border: 1px solid var(--agy-border, rgba(0, 240, 255, 0.35)) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.95), var(--agy-accent-glow) !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+}}
+
+.menubar .menubar-menu-items-holder {{
+  position: fixed !important;
+  z-index: 2147483640 !important;
+}}
+
+.context-view * {{
+  z-index: 2147483641 !important;
+}}
+
+.monaco-menu .monaco-action-bar .action-item {{
+  color: #f1f5f9 !important;
+  background: transparent !important;
+}}
+
+.monaco-menu .monaco-action-bar .action-item.focused,
+.monaco-menu .monaco-action-bar .action-item:hover {{
+  background-color: var(--agy-accent-soft, rgba(0, 240, 255, 0.16)) !important;
+  color: var(--agy-accent, #00f0ff) !important;
+  border-radius: 6px !important;
+}}
+
+.monaco-menu .monaco-action-bar .action-label {{
+  color: inherit !important;
+}}
+
+.monaco-menu .monaco-action-bar .keybinding {{
+  color: #94a3b8 !important;
+  opacity: 0.8 !important;
+}}
+
+.monaco-dialog-box,
+.monaco-dialog-modal,
+.modal-container,
+.monaco-modal {{
+  position: fixed !important;
+  z-index: 2147483642 !important;
+  background: #0f1728 !important;
+  border: 1px solid var(--agy-border, rgba(0, 240, 255, 0.35)) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.95), var(--agy-accent-glow) !important;
+}}
+
+/* Tabs & Editor Group Headers - Solid Surface & High Stacking (Prevents clipping & falling behind) */
+.monaco-workbench .part.editor > .content .editor-group-container > .title,
+.editor-group-container > .title,
+.tabs-and-actions-container,
+.tabs-container,
+.editor-group-header {{
+  position: relative !important;
+  z-index: 20 !important;
+  background: rgba(10, 14, 24, 0.92) !important;
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}}
+
+.tabs-container .tab {{
+  background: rgba(15, 23, 42, 0.75) !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.08) !important;
+  color: #94a3b8 !important;
+  position: relative !important;
+  z-index: 21 !important;
+}}
+
+.tabs-container .tab.active {{
+  background: var(--agy-card, #0f1728) !important;
+  color: #ffffff !important;
+  border-bottom: 2px solid var(--agy-accent) !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35), var(--agy-accent-glow) !important;
+}}
+
+/* Clear all opaque backgrounds on editor and agent containers so neon halo shines through */
+.monaco-workbench .part.editor,
+.monaco-workbench .part.editor > .content,
+.monaco-workbench .part.editor .editor-group-container,
+.monaco-workbench .part.editor .editor-group-container > .editor-container,
+.monaco-workbench .part.editor .editor-instance,
+.monaco-workbench .part.editor .split-view-view,
+.monaco-workbench .part.editor .grid-view-container,
+.gettingStartedContainer,
+.gettingStartedSlideDetails,
+.welcome-page,
+.welcome-page .welcome-page-content,
+.getting-started-category,
+.welcome-card,
+.monaco-editor,
+.monaco-editor-background,
+.overflow-guard,
+.margin,
+.monaco-editor .inputarea.ime-input,
+.jetski-root,
+[class*="jetski-root"],
+#root,
+#jetski-root,
+.bg-agent-convo-background,
+.bg-background,
+.bg-sidebar-background,
+.bg-editor-background,
+.bg-ide-editor-background,
+.bg-card,
+.bg-muted,
+main.flex-1,
+div[class*="bg-background"],
+div[class*="bg-sidebar-background"],
+div[class*="bg-agent-convo-background"],
+div[class*="bg-zinc"],
+div[class*="bg-[#18181b]"],
+div[class*="bg-[#09090b]"],
+div[class*="bg-[#121212]"],
+div[class*="bg-neutral"],
+div[class*="bg-slate"] {{
+  background: transparent !important;
+  background-color: transparent !important;
+}}
+
+/* Translucent titlebar and chrome panels with strict stacking */
+.monaco-workbench .part.titlebar,
+.part.titlebar {{
+  position: relative !important;
+  z-index: 5000 !important;
+  background: rgba(6, 9, 16, 0.92) !important;
+  backdrop-filter: blur(8px) !important;
+  -webkit-backdrop-filter: blur(8px) !important;
+  border-bottom: 1px solid var(--agy-border) !important;
+}}
+
+.monaco-workbench .part.statusbar {{
+  background: rgba(6, 9, 16, 0.85) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border-top: 1px solid var(--agy-border) !important;
+}}
+
+.monaco-workbench .part.activitybar {{
+  background: rgba(6, 9, 16, 0.85) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border-right: 1px solid var(--agy-border) !important;
+}}
+
+.monaco-workbench .part.sidebar {{
+  background: rgba(6, 9, 16, 0.82) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+  border-right: 1px solid var(--agy-border) !important;
+}}
+
+/* Neon buttons with radiant glow */
+.monaco-button,
+.monaco-text-button,
+button.getting-started-action {{
+  background: var(--agy-accent) !important;
+  color: #000000 !important;
+  font-weight: 700 !important;
+  border-radius: 12px !important;
+  border: 1px solid var(--agy-accent) !important;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4), var(--agy-accent-glow) !important;
+  transition: all 0.2s ease !important;
+}}
+
+.monaco-button:hover,
+.monaco-text-button:hover,
+button.getting-started-action:hover {{
+  box-shadow: 0 6px 26px rgba(0, 0, 0, 0.6), var(--agy-accent-glow) !important;
+  transform: translateY(-1px) !important;
+}}
+
+.monaco-button.secondary,
+.monaco-text-button.secondary {{
+  background: rgba(255, 255, 255, 0.05) !important;
+  color: #ffffff !important;
+  border: 1px solid var(--agy-border) !important;
+  border-radius: 12px !important;
+}}
+
+.getting-started-category,
+.welcome-card,
+[class*="workspace-item"],
+[class*="extension-card"] {{
+  background: var(--agy-card) !important;
+  border: 1px solid var(--agy-card-border) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
+  backdrop-filter: blur(12px) !important;
+}}
+
+/* Tabs with neon active border */
+.tabs-container .tab.active {{
+  background: var(--agy-card) !important;
+  border-bottom: 2px solid var(--agy-accent) !important;
+  box-shadow: 0 -2px 14px rgba(0, 0, 0, 0.4), var(--agy-accent-glow) !important;
+}}
+
+/* Composer box inside Agent Chat Panel */
+div[class*="chat-input-container"],
+div[class*="_ComposerLayoutRoot_"],
+div[class*="composer-container"] {{
+  background: var(--agy-composer-bg) !important;
+  border: 1px solid var(--agy-accent) !important;
+  border-radius: 20px !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), var(--agy-accent-glow) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+}}
+
+/* User chat bubble */
+[data-message-author-role="user"] > div:first-child {{
+  background: var(--agy-card) !important;
+  border: 1px solid var(--agy-card-border) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;
+}}
+
+/* Quick Input / Command Palette */
+.quick-input-widget {{
+  border-radius: 16px !important;
+  background: var(--agy-composer-bg) !important;
+  backdrop-filter: blur(28px) saturate(180%) !important;
+  border: 1px solid var(--agy-border) !important;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.7), var(--agy-accent-glow) !important;
+}}
+
+/* --- 4. Universal IDE Typography --- */
 body,
 .monaco-workbench,
 .monaco-shell,
@@ -161,7 +661,7 @@ body,
   font-family: 'Outfit', 'Vazirmatn', 'Vazirmatn UI', 'Vazir', 'Estedad', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
 }}
 
-/* --- 3. Persian BiDi in Chat, Prose & Markdown Previews --- */
+/* --- 5. Persian BiDi in Chat, Prose & Markdown Previews --- */
 .rendered-markdown p,
 .rendered-markdown li,
 .rendered-markdown h1,
@@ -189,7 +689,6 @@ body,
   letter-spacing: -0.01em !important;
 }}
 
-/* Direct RTL class for Persian elements */
 [dir="rtl"],
 .rtl,
 .bidi-rtl,
@@ -207,7 +706,6 @@ body,
   text-align: left !important;
 }}
 
-/* Chat Textareas & Inputs */
 textarea,
 input,
 [contenteditable="true"],
@@ -217,8 +715,7 @@ input,
   unicode-bidi: plaintext !important;
 }}
 
-/* --- 4. Monaco Editor Persian & Markdown BiDi Engine --- */
-/* Markdown & Plaintext editor font */
+/* --- 6. Monaco Editor Persian & Markdown BiDi Engine --- */
 .monaco-editor[data-mode-id="markdown"],
 .monaco-editor[data-mode-id="plaintext"],
 .editor-instance[aria-label*=".md"],
@@ -238,15 +735,6 @@ input,
   line-height: 1.85 !important;
 }}
 
-/* In markdown editors, allow tokens inside lines to resolve BiDi cleanly */
-.editor-instance[aria-label*=".md"] .view-line > span,
-.editor-instance[aria-label*=".markdown"] .view-line > span,
-.monaco-editor[data-uri*=".md"] .view-line > span,
-.monaco-editor[data-mode-id="markdown"] .view-line > span {{
-  unicode-bidi: plaintext !important;
-}}
-
-/* Persian lines in Monaco Editor (automatically flagged by runtime enhancer) */
 .monaco-editor .view-line.bidi-rtl-line,
 .editor-instance[aria-label*=".md"] .view-line.bidi-rtl-line,
 .editor-instance[aria-label*=".markdown"] .view-line.bidi-rtl-line,
@@ -266,7 +754,6 @@ input,
   font-family: 'Vazirmatn', 'Vazirmatn UI', 'Vazir', 'Estedad', sans-serif !important;
 }}
 
-/* English / Code lines inside markdown or code files stay strictly LTR */
 .monaco-editor .view-line.bidi-ltr-line,
 .editor-instance[aria-label*=".md"] .view-line.bidi-ltr-line,
 .monaco-editor .view-line:has([class*="fenced"]),
@@ -276,14 +763,7 @@ input,
   unicode-bidi: isolate !important;
 }}
 
-/* Selection highlight in RTL lines */
-.editor-instance[aria-label*=".md"] .selected-text[style*="left:0"],
-.monaco-editor .view-line.bidi-rtl-line ~ .selected-text[style*="left:0"] {{
-  right: 0 !important;
-  left: auto !important;
-}}
-
-/* --- 5. Strict Code Blocks, Terminals & Formulas (100% LTR & Monospace) --- */
+/* Code Blocks, Terminals & Formulas (100% LTR & Monospace) */
 .terminal,
 .terminal *,
 .xterm,
@@ -315,10 +795,6 @@ math * {{
   unicode-bidi: isolate !important;
 }}
 
-.katex-display {{
-  text-align: center !important;
-}}
-
 /* Slim Sleek Scrollbars */
 .monaco-scrollable-element > .scrollbar > .slider {{
   border-radius: 8px !important;
@@ -327,7 +803,127 @@ math * {{
 }}
 
 .monaco-scrollable-element > .scrollbar > .slider:hover {{
-  background: rgba(0, 240, 255, 0.45) !important;
+  background: var(--agy-accent) !important;
+}}
+
+/* Floating Draggable Action HUD Pill - Placed in titlebar right to avoid blocking window title */
+#agy-hud-pill {{
+  position: fixed !important;
+  top: 6px !important;
+  right: 180px !important;
+  left: auto !important;
+  transform: none !important;
+  z-index: 2147483647 !important;
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 4px 12px !important;
+  background: rgba(15, 23, 42, 0.92) !important;
+  backdrop-filter: blur(28px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(28px) saturate(180%) !important;
+  border: 1px solid var(--agy-border) !important;
+  border-radius: 9999px !important;
+  box-shadow: 0 10px 35px rgba(0, 0, 0, 0.75), var(--agy-accent-glow) !important;
+  user-select: none !important;
+  font-family: var(--cpe-font) !important;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease !important;
+  cursor: grab !important;
+}}
+
+#agy-hud-pill:hover {{
+  border-color: var(--agy-accent) !important;
+  box-shadow: 0 12px 42px rgba(0, 0, 0, 0.8), var(--agy-accent-glow) !important;
+}}
+
+.agy-hud-btn {{
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  padding: 4px 10px !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  border-radius: 9999px !important;
+  color: #f1f5f9 !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  transition: all 0.16s ease !important;
+  font-family: inherit !important;
+}}
+
+.agy-hud-btn:hover {{
+  background: var(--agy-accent-soft) !important;
+  color: var(--agy-accent) !important;
+  border-color: var(--agy-accent) !important;
+  transform: scale(1.04) !important;
+}}
+
+/* Modal Overlay & Sheet */
+.agy-modal-overlay {{
+  position: fixed !important;
+  inset: 0 !important;
+  background: rgba(0, 0, 0, 0.75) !important;
+  backdrop-filter: blur(18px) !important;
+  -webkit-backdrop-filter: blur(18px) !important;
+  z-index: 1000000 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 0.2s ease !important;
+  font-family: var(--cpe-font) !important;
+  direction: rtl !important;
+}}
+
+.agy-modal-overlay.agy-open {{
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}}
+
+.agy-modal-sheet {{
+  width: 540px !important;
+  max-width: 94vw !important;
+  max-height: 88vh !important;
+  overflow-y: auto !important;
+  background: #0f172a !important;
+  border: 1px solid var(--agy-border) !important;
+  border-radius: 22px !important;
+  padding: 24px !important;
+  box-shadow: 0 25px 60px rgba(0, 0, 0, 0.85), var(--agy-accent-glow) !important;
+  color: #f8fafc !important;
+  transform: scale(0.96) !important;
+  transition: transform 0.2s ease !important;
+}}
+
+.agy-modal-overlay.agy-open .agy-modal-sheet {{
+  transform: scale(1) !important;
+}}
+
+#agy-toast {{
+  position: fixed !important;
+  bottom: 32px !important;
+  left: 50% !important;
+  transform: translateX(-50%) translateY(20px) !important;
+  background: rgba(15, 23, 42, 0.95) !important;
+  border: 1px solid var(--agy-border) !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), var(--agy-accent-glow) !important;
+  color: #f8fafc !important;
+  padding: 9px 20px !important;
+  border-radius: 9999px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  z-index: 1000002 !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: all 0.25s ease !important;
+  font-family: var(--cpe-font) !important;
+  direction: rtl !important;
+}}
+
+#agy-toast.agy-toast-show {{
+  opacity: 1 !important;
+  transform: translateX(-50%) translateY(0) !important;
 }}
 """
 
@@ -335,7 +931,7 @@ math * {{
     custom_theme_path.write_text(theme_css, encoding="utf-8")
     print(f"✓ Created {custom_theme_path.name} ({len(theme_css)} chars)")
 
-    # 3. Create antigravity-ide-enhancer.js (Full Theme Customizer, Neon Glow, HUD & BiDi Engine)
+    # 3. Create antigravity-ide-enhancer.js (Trusted-types safe enhancer, live customizer & HUD)
     enhancer_js = """// Antigravity IDE Runtime BiDi, Theme Customizer & Neon Suite
 // Fully integrated with Custom Themes (Cyberpunk, Synthwave, AMOLED, etc.), Fonts, HUD Pill & Modal
 (() => {
@@ -345,104 +941,116 @@ math * {{
   const STORAGE_KEY = 'agy_ide_theme_settings';
   const PERSIAN_REGEX = /[\\u0600-\\u06FF\\u0750-\\u077F\\uFB50-\\uFDFF\\uFE70-\\uFEFF]/;
 
+  // Safe DOM helper that bypasses Trusted Types without throwing TypeError
+  function setHTML(el, htmlString) {
+    if (!el) return;
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(htmlString, 'text/html');
+      while (el.firstChild) el.removeChild(el.firstChild);
+      while (doc.body.firstChild) el.appendChild(doc.body.firstChild);
+    } catch (e) {
+      try { el.innerHTML = htmlString; } catch (e2) {}
+    }
+  }
+
   // 1. Color Palettes & Themes
   const THEMES = {
     cyber: {
-      name: '⚡️ سایبرپانک نئون (Cyberpunk Neon)',
+      name: '⚡️ سایبرپانک نئون (Cyan Neon - فیروزه‌ای درخشان)',
       accent: '#00f0ff',
-      accentGlow: '0 0 18px rgba(0, 240, 255, 0.55)',
-      accentSoft: 'rgba(0, 240, 255, 0.15)',
-      border: 'rgba(0, 240, 255, 0.32)',
+      accentGlow: '0 0 20px rgba(0, 240, 255, 0.6)',
+      accentSoft: 'rgba(0, 240, 255, 0.16)',
+      border: 'rgba(0, 240, 255, 0.35)',
       bg: '#080c14',
-      bgGradient: 'radial-gradient(ellipse at 50% 0%, #101c33 0%, #060910 75%)',
-      sidebar: '#05080f',
+      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(0, 240, 255, 0.16) 0%, rgba(14, 28, 54, 0.72) 42%, #080c14 85%)',
+      sidebar: '#060910',
       card: '#0f1728',
-      cardBorder: 'rgba(0, 240, 255, 0.25)',
+      cardBorder: 'rgba(0, 240, 255, 0.28)',
       composerBg: 'rgba(15, 23, 42, 0.95)',
       text: '#f1f5f9'
     },
     synthwave: {
-      name: '💜 سینت‌ویو ۸۴ (SynthWave Neon)',
+      name: '💜 سینت‌ویو ۸۴ (SynthWave Neon - سرخابی و بنفش)',
       accent: '#ff007f',
-      accentSecondary: '#00f0ff',
-      accentGlow: '0 0 20px rgba(255, 0, 127, 0.6)',
-      accentSoft: 'rgba(255, 0, 127, 0.16)',
-      border: 'rgba(255, 0, 127, 0.35)',
+      accentGlow: '0 0 22px rgba(255, 0, 127, 0.65)',
+      accentSoft: 'rgba(255, 0, 127, 0.18)',
+      border: 'rgba(255, 0, 127, 0.38)',
       bg: '#0d071a',
-      bgGradient: 'radial-gradient(ellipse at 50% 0%, #250f42 0%, #080312 75%)',
+      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(255, 0, 127, 0.18) 0%, rgba(42, 12, 64, 0.75) 42%, #0d071a 85%)',
       sidebar: '#080312',
       card: '#1a0d30',
-      cardBorder: 'rgba(255, 0, 127, 0.28)',
+      cardBorder: 'rgba(255, 0, 127, 0.32)',
       composerBg: 'rgba(24, 13, 46, 0.95)',
       text: '#fff0f8'
     },
     amoled: {
       name: '🖤 آمولد بلک و شیشه‌ای (Pure AMOLED & Glass)',
       accent: '#38bdf8',
-      accentGlow: '0 0 14px rgba(56, 189, 248, 0.4)',
+      accentGlow: '0 0 16px rgba(56, 189, 248, 0.45)',
       accentSoft: 'rgba(255, 255, 255, 0.08)',
-      border: 'rgba(255, 255, 255, 0.18)',
+      border: 'rgba(255, 255, 255, 0.2)',
       bg: '#000000',
-      bgGradient: '#000000',
+      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(56, 189, 248, 0.12) 0%, rgba(10, 22, 38, 0.5) 40%, #000000 80%)',
       sidebar: '#040404',
       card: '#0d0d0d',
-      cardBorder: 'rgba(255, 255, 255, 0.15)',
+      cardBorder: 'rgba(255, 255, 255, 0.16)',
       composerBg: '#080808',
       text: '#ffffff'
     },
     midnight: {
-      name: '🌌 میدنایت ایندیگو (Midnight Indigo)',
+      name: '🌌 میدنایت ایندیگو (Midnight Indigo - سرمه‌ای نیلی)',
       accent: '#818cf8',
-      accentGlow: '0 0 18px rgba(129, 140, 248, 0.5)',
+      accentGlow: '0 0 20px rgba(129, 140, 248, 0.55)',
       accentSoft: 'rgba(99, 102, 241, 0.16)',
-      border: 'rgba(99, 102, 241, 0.28)',
+      border: 'rgba(99, 102, 241, 0.3)',
       bg: '#0a0e1a',
-      bgGradient: 'radial-gradient(ellipse at 50% 0%, #17203b 0%, #070a13 75%)',
+      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(129, 140, 248, 0.18) 0%, rgba(25, 32, 66, 0.75) 42%, #0a0e1a 85%)',
       sidebar: '#060912',
       card: '#12182c',
-      cardBorder: 'rgba(99, 102, 241, 0.25)',
+      cardBorder: 'rgba(99, 102, 241, 0.26)',
       composerBg: 'rgba(18, 24, 44, 0.95)',
       text: '#f8fafc'
     },
     emerald: {
-      name: '🟢 ماتریکس زمردی (Emerald Matrix)',
+      name: '🟢 ماتریکس زمردی (Emerald Matrix - سبز نئونی)',
       accent: '#10b981',
-      accentGlow: '0 0 18px rgba(16, 185, 129, 0.5)',
+      accentGlow: '0 0 20px rgba(16, 185, 129, 0.55)',
       accentSoft: 'rgba(16, 185, 129, 0.16)',
-      border: 'rgba(16, 185, 129, 0.28)',
+      border: 'rgba(16, 185, 129, 0.3)',
       bg: '#06100a',
-      bgGradient: 'radial-gradient(ellipse at 50% 0%, #0e291a 0%, #040a06 75%)',
+      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(16, 185, 129, 0.18) 0%, rgba(12, 44, 26, 0.75) 42%, #06100a 85%)',
       sidebar: '#030805',
       card: '#0c2014',
-      cardBorder: 'rgba(16, 185, 129, 0.25)',
+      cardBorder: 'rgba(16, 185, 129, 0.26)',
       composerBg: 'rgba(10, 26, 17, 0.95)',
       text: '#ecfdf5'
     },
     sunset: {
-      name: '🌅 سان‌ست ویپرویو (Sunset Vaporwave)',
+      name: '🌅 سان‌ست ویپرویو (Sunset Vaporwave - طلایی و کهربایی)',
       accent: '#f59e0b',
-      accentGlow: '0 0 18px rgba(245, 158, 11, 0.5)',
+      accentGlow: '0 0 20px rgba(245, 158, 11, 0.55)',
       accentSoft: 'rgba(245, 158, 11, 0.16)',
-      border: 'rgba(245, 158, 11, 0.28)',
+      border: 'rgba(245, 158, 11, 0.3)',
       bg: '#140c06',
-      bgGradient: 'radial-gradient(ellipse at 50% 0%, #2e1709 0%, #0c0703 75%)',
+      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(245, 158, 11, 0.18) 0%, rgba(55, 26, 10, 0.75) 42%, #140c06 85%)',
       sidebar: '#0a0502',
       card: '#24140b',
-      cardBorder: 'rgba(245, 158, 11, 0.25)',
+      cardBorder: 'rgba(245, 158, 11, 0.26)',
       composerBg: 'rgba(32, 18, 9, 0.95)',
       text: '#fffbeb'
     },
     clean_dark: {
       name: '⚪️ دارک اسلیت مدرن (Modern Dark Slate)',
       accent: '#38bdf8',
-      accentGlow: '0 0 12px rgba(56, 189, 248, 0.35)',
+      accentGlow: '0 0 14px rgba(56, 189, 248, 0.35)',
       accentSoft: 'rgba(56, 189, 248, 0.12)',
-      border: 'rgba(255, 255, 255, 0.14)',
-      bg: '#111318',
-      bgGradient: 'radial-gradient(ellipse at 50% 0%, #1a1e26 0%, #0e1014 70%)',
+      border: 'rgba(255, 255, 255, 0.15)',
+      bg: '#0e1117',
+      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(56, 189, 248, 0.12) 0%, rgba(26, 32, 44, 0.7) 42%, #0e1117 85%)',
       sidebar: '#0c0e12',
       card: '#181b22',
-      cardBorder: 'rgba(255, 255, 255, 0.12)',
+      cardBorder: 'rgba(255, 255, 255, 0.14)',
       composerBg: 'rgba(24, 27, 34, 0.94)',
       text: '#f8fafc'
     }
@@ -488,12 +1096,15 @@ math * {{
     const s = loadSettings();
     const t = THEMES[s.theme] || THEMES.cyber;
 
+    // Set theme attribute on root and body for immediate CSS rule cascading
+    document.documentElement.setAttribute('data-agy-theme', s.theme);
+    if (document.body) document.body.setAttribute('data-agy-theme', s.theme);
+
     const fontEnPart = (s.fontEn && s.fontEn !== 'system') ? `'${s.fontEn}', ` : '';
     const fontFaPart = (s.fontFa && s.fontFa !== 'system') ? `'${s.fontFa}', ` : "'Vazirmatn', ";
     const combinedFont = `${fontEnPart}${fontFaPart}-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif`;
 
     const glowShadow = s.strokeMode === 'glow' ? t.accentGlow : (s.strokeMode === 'refined' ? `0 0 10px ${t.accentSoft}` : 'none');
-    const glowBorder = s.strokeMode === 'glow' ? t.accent : t.border;
 
     dynamicStyleEl.textContent = `
       :root {
@@ -502,28 +1113,31 @@ math * {{
         --cpe-accent: ${t.accent};
         --cpe-accent-glow: ${t.accentGlow};
         --cpe-border: ${t.border};
-        --vscode-editor-background: ${t.bg} !important;
-        --vscode-sideBar-background: ${t.sidebar} !important;
-        --vscode-activityBar-background: ${t.sidebar} !important;
-        --vscode-titleBar-activeBackground: ${t.sidebar} !important;
-        --vscode-statusBar-background: ${t.sidebar} !important;
-        --vscode-tab-activeBackground: ${t.card} !important;
-        --vscode-tab-inactiveBackground: ${t.sidebar} !important;
-        --vscode-focusBorder: ${t.accent} !important;
-        --vscode-button-background: ${t.accent} !important;
-        --vscode-button-foreground: #000000 !important;
-        --vscode-button-hoverBackground: ${t.accent} !important;
+        --agy-bg: ${t.bg};
+        --agy-bg-gradient: ${t.bgGradient};
+        --agy-accent: ${t.accent};
+        --agy-accent-glow: ${t.accentGlow};
+        --agy-accent-soft: ${t.accentSoft};
+        --agy-border: ${t.border};
+        --agy-card: ${t.card};
+        --agy-card-border: ${t.cardBorder};
+        --agy-sidebar: ${t.sidebar};
+        --agy-composer-bg: ${t.composerBg};
+        --agy-text: ${t.text};
+        --vscode-editor-background: transparent !important;
+        --vscode-sideBar-background: transparent !important;
+        --vscode-sideBarTitle-background: transparent !important;
+        --vscode-sideBarSectionHeader-background: transparent !important;
+        --vscode-editorGroupHeader-tabsBackground: transparent !important;
+        --vscode-editorGroupHeader-noTabsBackground: transparent !important;
+        --vscode-tab-inactiveBackground: transparent !important;
+        --vscode-tab-activeBackground: rgba(255, 255, 255, 0.08) !important;
       }
 
-      /* Universal Font Override */
       body,
       .monaco-workbench,
       .monaco-shell,
       .part,
-      .part.titlebar,
-      .part.sidebar,
-      .part.activitybar,
-      .part.statusbar,
       .action-label,
       .label-name,
       .quick-input-widget,
@@ -533,286 +1147,6 @@ math * {{
       [class*="agent"],
       [class*="jetski"] {
         font-family: var(--cpe-font) !important;
-      }
-
-      /* 1. Workbench Deep Theming & Neon Gradients */
-      .monaco-workbench {
-        background: ${t.bg} !important;
-        background-image: ${t.bgGradient} !important;
-      }
-
-      .monaco-workbench .part.editor {
-        background: ${t.bg} !important;
-        background-image: ${t.bgGradient} !important;
-      }
-
-      .monaco-workbench .part.sidebar,
-      .monaco-workbench .part.activitybar,
-      .monaco-workbench .part.titlebar,
-      .monaco-workbench .part.statusbar {
-        background-color: ${t.sidebar} !important;
-      }
-
-      .monaco-workbench .part.sidebar {
-        border-right: 1px solid ${t.border} !important;
-      }
-
-      .monaco-workbench .part.titlebar {
-        border-bottom: 1px solid ${t.border} !important;
-      }
-
-      .monaco-workbench .part.statusbar {
-        border-top: 1px solid ${t.border} !important;
-      }
-
-      /* 2. Welcome Screen / Getting Started Glow (Open Folder, etc.) */
-      .gettingStartedContainer,
-      .gettingStartedSlideDetails,
-      .welcome-page {
-        background: transparent !important;
-      }
-
-      .monaco-button,
-      .monaco-text-button,
-      button.getting-started-action {
-        background: ${t.accent} !important;
-        color: #000000 !important;
-        font-weight: 700 !important;
-        border-radius: 12px !important;
-        border: 1px solid ${t.accent} !important;
-        box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4), ${glowShadow} !important;
-        transition: all 0.2s ease !important;
-      }
-
-      .monaco-button:hover,
-      .monaco-text-button:hover {
-        box-shadow: 0 6px 26px rgba(0, 0, 0, 0.6), ${t.accentGlow} !important;
-        transform: translateY(-1px) !important;
-      }
-
-      .monaco-button.secondary,
-      .monaco-text-button.secondary {
-        background: rgba(255, 255, 255, 0.05) !important;
-        color: #ffffff !important;
-        border: 1px solid ${t.border} !important;
-        border-radius: 12px !important;
-      }
-
-      .monaco-button.secondary:hover {
-        border-color: ${t.accent} !important;
-        color: ${t.accent} !important;
-        box-shadow: ${t.accentGlow} !important;
-      }
-
-      .getting-started-category,
-      .welcome-card,
-      [class*="workspace-item"],
-      [class*="extension-card"] {
-        background: ${t.card} !important;
-        border: 1px solid ${t.cardBorder} !important;
-        border-radius: 14px !important;
-        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
-      }
-
-      /* 3. Editor Tabs with Neon Glow */
-      .tabs-container .tab {
-        border-radius: 10px 10px 0 0 !important;
-        border: 1px solid transparent !important;
-        transition: all 0.18s ease !important;
-      }
-
-      .tabs-container .tab.active {
-        background: ${t.card} !important;
-        border: 1px solid ${t.cardBorder} !important;
-        border-bottom: 2px solid ${t.accent} !important;
-        box-shadow: 0 -2px 14px rgba(0, 0, 0, 0.4), ${glowShadow} !important;
-      }
-
-      /* 4. Monaco Editor & Selection Glow */
-      .monaco-editor,
-      .monaco-editor-background {
-        background: ${t.bg} !important;
-      }
-
-      .monaco-editor .cursor {
-        background-color: ${t.accent} !important;
-        box-shadow: 0 0 10px ${t.accent} !important;
-      }
-
-      ::selection {
-        background: ${t.accent}40 !important;
-        color: #ffffff !important;
-      }
-
-      /* 5. Agent Chat Panel (Jetski) Theming */
-      .jetski-root,
-      [class*="jetski"] {
-        background: ${t.bg} !important;
-      }
-
-      div[class*="chat-input-container"],
-      div[class*="_ComposerLayoutRoot_"],
-      div[class*="composer-container"] {
-        background: ${t.composerBg} !important;
-        border: 1px solid ${glowBorder} !important;
-        border-radius: 20px !important;
-        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), ${glowShadow} !important;
-        backdrop-filter: blur(20px) !important;
-      }
-
-      div[class*="chat-input-container"]:focus-within,
-      div[class*="_ComposerLayoutRoot_"]:focus-within {
-        border-color: ${t.accent} !important;
-        box-shadow: 0 0 0 1.5px ${t.accent}, 0 8px 36px rgba(0, 0, 0, 0.6), ${t.accentGlow} !important;
-      }
-
-      [data-message-author-role="user"] > div:first-child {
-        background: ${t.card} !important;
-        border: 1px solid ${t.cardBorder} !important;
-        border-radius: 16px !important;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35) !important;
-      }
-
-      /* Quick Input / Command Palette */
-      .quick-input-widget {
-        border-radius: 16px !important;
-        background: ${t.composerBg} !important;
-        backdrop-filter: blur(28px) saturate(180%) !important;
-        border: 1px solid ${t.border} !important;
-        box-shadow: 0 16px 48px rgba(0, 0, 0, 0.7), ${t.accentGlow} !important;
-      }
-
-      .quick-input-filter .monaco-inputbox {
-        border-radius: 10px !important;
-        background: rgba(255, 255, 255, 0.05) !important;
-        border: 1px solid ${t.border} !important;
-      }
-
-      .quick-input-filter .monaco-inputbox.synthetic-focus {
-        border-color: ${t.accent} !important;
-        box-shadow: ${t.accentGlow} !important;
-      }
-
-      /* 6. Floating Action HUD Pill */
-      #agy-hud-pill {
-        position: fixed;
-        top: 8px;
-        right: 140px;
-        z-index: 999999;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        padding: 4px 12px;
-        background: rgba(15, 23, 42, 0.9);
-        backdrop-filter: blur(24px);
-        -webkit-backdrop-filter: blur(24px);
-        border: 1px solid ${t.border};
-        border-radius: 9999px;
-        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6), ${t.accentGlow};
-        user-select: none;
-        font-family: var(--cpe-font);
-        transition: transform 0.15s ease, box-shadow 0.2s ease;
-        cursor: grab;
-      }
-
-      #agy-hud-pill:hover {
-        border-color: ${t.accent};
-        box-shadow: 0 10px 36px rgba(0, 0, 0, 0.75), ${t.accentGlow};
-      }
-
-      #agy-hud-pill:active {
-        cursor: grabbing;
-      }
-
-      .agy-hud-btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        padding: 4px 10px;
-        background: rgba(255, 255, 255, 0.08);
-        border: 1px solid rgba(255, 255, 255, 0.14);
-        border-radius: 9999px;
-        color: #f1f5f9;
-        font-size: 11px;
-        font-weight: 600;
-        cursor: pointer;
-        transition: all 0.16s ease;
-        font-family: inherit;
-      }
-
-      .agy-hud-btn:hover {
-        background: ${t.accentSoft};
-        color: ${t.accent};
-        border-color: ${t.accent};
-        transform: scale(1.04);
-      }
-
-      /* Modal Dialog */
-      .agy-modal-overlay {
-        position: fixed;
-        inset: 0;
-        background: rgba(0, 0, 0, 0.75);
-        backdrop-filter: blur(18px);
-        -webkit-backdrop-filter: blur(18px);
-        z-index: 1000000;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.2s ease;
-        font-family: var(--cpe-font);
-        direction: rtl;
-      }
-
-      .agy-modal-overlay.agy-open {
-        opacity: 1;
-        pointer-events: auto;
-      }
-
-      .agy-modal-sheet {
-        width: 540px;
-        max-width: 94vw;
-        max-height: 88vh;
-        overflow-y: auto;
-        background: #0f172a;
-        border: 1px solid ${t.border};
-        border-radius: 22px;
-        padding: 24px;
-        box-shadow: 0 25px 60px rgba(0, 0, 0, 0.85), ${t.accentGlow};
-        color: #f8fafc;
-        transform: scale(0.96);
-        transition: transform 0.2s ease;
-      }
-
-      .agy-modal-overlay.agy-open .agy-modal-sheet {
-        transform: scale(1);
-      }
-
-      #agy-toast {
-        position: fixed;
-        bottom: 32px;
-        left: 50%;
-        transform: translateX(-50%) translateY(20px);
-        background: rgba(15, 23, 42, 0.95);
-        border: 1px solid ${t.border};
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6), ${t.accentGlow};
-        color: #f8fafc;
-        padding: 9px 20px;
-        border-radius: 9999px;
-        font-size: 13px;
-        font-weight: 600;
-        z-index: 1000002;
-        opacity: 0;
-        pointer-events: none;
-        transition: all 0.25s ease;
-        font-family: var(--cpe-font);
-        direction: rtl;
-      }
-
-      #agy-toast.agy-toast-show {
-        opacity: 1;
-        transform: translateX(-50%) translateY(0);
       }
     `;
   }
@@ -909,7 +1243,8 @@ math * {{
     m = document.createElement('div');
     m.id = id;
     m.className = 'agy-modal-overlay';
-    m.innerHTML = `
+    
+    setHTML(m, `
       <div class="agy-modal-sheet">
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; border-bottom: 1px solid rgba(255,255,255,0.12); padding-bottom: 14px;">
           <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: #fff;">${title}</h3>
@@ -919,11 +1254,12 @@ math * {{
           ${bodyHtml}
         </div>
       </div>
-    `;
+    `);
 
     document.body.appendChild(m);
 
-    m.querySelector('.agy-modal-close').onclick = () => m.classList.remove('agy-open');
+    const closeBtn = m.querySelector('.agy-modal-close');
+    if (closeBtn) closeBtn.onclick = () => m.classList.remove('agy-open');
     m.onclick = (e) => {
       if (e.target === m) m.classList.remove('agy-open');
     };
@@ -1006,9 +1342,14 @@ math * {{
         <input type="checkbox" id="agy-chk-rtl" ${s.rtlAuto ? 'checked' : ''} style="width: 18px; height: 18px; cursor: pointer; accent-color: #00f0ff;">
       </div>
 
-      <button id="agy-btn-save-theme" style="width: 100%; padding: 12px; background: #00f0ff; color: #000; font-weight: 700; border: none; border-radius: 12px; cursor: pointer; font-size: 14px; font-family: inherit; box-shadow: 0 0 16px rgba(0, 240, 255, 0.45); transition: all 0.2s ease;">
-        ذخیره و اعمال فوری
-      </button>
+      <div style="display: flex; gap: 10px;">
+        <button id="agy-btn-reset-theme" style="flex: 1; padding: 12px; background: rgba(255,255,255,0.08); color: #cbd5e1; border: 1px solid rgba(255,255,255,0.18); border-radius: 12px; cursor: pointer; font-size: 13px; font-family: inherit;">
+          بازنشانی
+        </button>
+        <button id="agy-btn-save-theme" style="flex: 2; padding: 12px; background: #00f0ff; color: #000; font-weight: 700; border: none; border-radius: 12px; cursor: pointer; font-size: 14px; font-family: inherit; box-shadow: 0 0 16px rgba(0, 240, 255, 0.45); transition: all 0.2s ease;">
+          ذخیره و تایید
+        </button>
+      </div>
     `;
 
     const modal = createModal('agy-modal-theme', '🎨 تنظیمات تم رنگی، نئون و فونت Antigravity IDE', html);
@@ -1016,21 +1357,40 @@ math * {{
 
     const rng = document.getElementById('agy-rng-font-size');
     const valLbl = document.getElementById('agy-val-font-size');
-    if (rng && valLbl) {
-      rng.oninput = () => { valLbl.textContent = `${rng.value}px`; };
-    }
-
-    document.getElementById('agy-btn-save-theme').onclick = () => {
+    
+    // Live instantaneous update trigger
+    const triggerLive = () => {
       const theme = document.getElementById('agy-sel-theme').value;
       const strokeMode = document.getElementById('agy-sel-stroke').value;
       const fontFa = document.getElementById('agy-sel-font-fa').value;
       const fontEn = document.getElementById('agy-sel-font-en').value;
       const fontSize = parseFloat(document.getElementById('agy-rng-font-size').value);
       const rtlAuto = document.getElementById('agy-chk-rtl').checked;
-
       saveSettings({ theme, strokeMode, fontFa, fontEn, fontSize, rtlAuto });
+    };
+
+    document.getElementById('agy-sel-theme').onchange = triggerLive;
+    document.getElementById('agy-sel-stroke').onchange = triggerLive;
+    document.getElementById('agy-sel-font-fa').onchange = triggerLive;
+    document.getElementById('agy-sel-font-en').onchange = triggerLive;
+    document.getElementById('agy-chk-rtl').onchange = triggerLive;
+    if (rng && valLbl) {
+      rng.oninput = () => {
+        valLbl.textContent = `${rng.value}px`;
+        triggerLive();
+      };
+    }
+
+    document.getElementById('agy-btn-reset-theme').onclick = () => {
+      saveSettings(DEFAULT_SETTINGS);
       modal.classList.remove('agy-open');
-      showToast('🎨 تم و جلوه‌های نئون با موفقیت اعمال شدند');
+      showToast('🔄 تنظیمات تم و نئون به حالت پیش‌فرض بازگشت');
+    };
+
+    document.getElementById('agy-btn-save-theme').onclick = () => {
+      triggerLive();
+      modal.classList.remove('agy-open');
+      showToast('🎨 تم و جلوه‌های نئون با موفقیت ذخیره شدند');
     };
   }
 
@@ -1057,11 +1417,14 @@ math * {{
     `);
     modal.classList.add('agy-open');
 
-    document.getElementById('agy-btn-launch-gui').onclick = () => {
-      window.open('http://127.0.0.1:39285', '_blank');
-      showToast('🚀 پنل سوییچر باز شد');
-      modal.classList.remove('agy-open');
-    };
+    const guiBtn = document.getElementById('agy-btn-launch-gui');
+    if (guiBtn) {
+      guiBtn.onclick = () => {
+        window.open('http://127.0.0.1:39285', '_blank');
+        showToast('🚀 پنل سوییچر باز شد');
+        modal.classList.remove('agy-open');
+      };
+    }
   }
 
   // 9. Floating Draggable Action HUD Pill
@@ -1069,36 +1432,59 @@ math * {{
     if (window !== window.top) return; // Only show on top workbench window
 
     let hud = document.getElementById('agy-hud-pill');
-    if (hud) hud.remove();
+    if (hud) return; // Already exists
 
     hud = document.createElement('div');
     hud.id = 'agy-hud-pill';
 
-    hud.innerHTML = `
-      <span id="agy-hud-drag-handle" style="cursor: grab; display: flex; align-items: center; gap: 5px; padding: 2px 4px; user-select: none;" title="برای جابه‌جایی نوار، اینجا را بگیرید و بکشید">
-        <span style="font-size: 12px; color: rgba(255,255,255,0.45); font-family: monospace;">⠿</span>
-        <span style="width: 7px; height: 7px; border-radius: 50%; background: #00f0ff; box-shadow: 0 0 8px #00f0ff;"></span>
+    setHTML(hud, `
+      <span id="agy-hud-drag-handle" style="cursor: grab; display: flex; align-items: center; gap: 6px; padding: 2px 4px; user-select: none;" title="برای جابه‌جایی نوار، اینجا را بگیرید و بکشید">
+        <span style="font-size: 13px; color: rgba(255,255,255,0.45); font-family: monospace;">⠿</span>
+        <span style="width: 8px; height: 8px; border-radius: 50%; background: #00f0ff; box-shadow: 0 0 8px #00f0ff;"></span>
         <span style="font-size: 11px; font-weight: 700; color: #00f0ff; letter-spacing: 0.5px;">AGY Pro</span>
       </span>
-      <button class="agy-hud-btn" id="agy-btn-theme" title="تنظیمات تم رنگی، درخشش نئون و فونت‌ها">
+      <div style="display: flex; align-items: center; gap: 3px; border-right: 1px solid rgba(255,255,255,0.15); border-left: 1px solid rgba(255,255,255,0.15); padding: 0 6px;">
+        <button class="agy-quick-theme-btn" data-theme="cyber" title="سایبرپانک نئون (فیروزه‌ای)" style="background: none; border: none; cursor: pointer; font-size: 13px; padding: 2px; border-radius: 4px; transition: transform 0.15s ease;">⚡️</button>
+        <button class="agy-quick-theme-btn" data-theme="synthwave" title="سینت‌ویو ۸۴ (سرخابی و بنفش)" style="background: none; border: none; cursor: pointer; font-size: 13px; padding: 2px; border-radius: 4px; transition: transform 0.15s ease;">💜</button>
+        <button class="agy-quick-theme-btn" data-theme="emerald" title="ماتریکس زمردی (سبز)" style="background: none; border: none; cursor: pointer; font-size: 13px; padding: 2px; border-radius: 4px; transition: transform 0.15s ease;">🟢</button>
+        <button class="agy-quick-theme-btn" data-theme="sunset" title="افق سان‌ست (طلایی)" style="background: none; border: none; cursor: pointer; font-size: 13px; padding: 2px; border-radius: 4px; transition: transform 0.15s ease;">🌅</button>
+        <button class="agy-quick-theme-btn" data-theme="amoled" title="آمولد خالص (مشکی مطلق)" style="background: none; border: none; cursor: pointer; font-size: 13px; padding: 2px; border-radius: 4px; transition: transform 0.15s ease;">🖤</button>
+      </div>
+      <button class="agy-hud-btn" id="agy-btn-theme" title="تنظیمات تم رنگی، درخشش نئون و فونت‌ها (Alt + T)">
         🎨 <span>تم و نئون</span>
       </button>
-      <button class="agy-hud-btn" id="agy-btn-accounts" title="مدیریت و سوئیچ بین اکانت‌ها">
+      <button class="agy-hud-btn" id="agy-btn-accounts" title="مدیریت و سوئیچ بین اکانت‌ها (Alt + A)">
         🔄 <span>اکانت‌ها</span>
       </button>
-    `;
+    `);
 
-    document.body.appendChild(hud);
+    // Mount inside document.body
+    const mountParent = document.body || document.documentElement;
+    mountParent.appendChild(hud);
 
-    // Restore saved position
+    // Quick theme click listeners
+    hud.querySelectorAll('.agy-quick-theme-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const th = btn.getAttribute('data-theme');
+        if (th && THEMES[th]) {
+          saveSettings({ theme: th });
+          showToast(`🎨 تم ${THEMES[th].name.split('(')[0].trim()} فعال شد`);
+        }
+      });
+      btn.addEventListener('mouseenter', () => btn.style.transform = 'scale(1.25)');
+      btn.addEventListener('mouseleave', () => btn.style.transform = 'scale(1)');
+    });
+
+    // Restore saved position only if explicitly dragged with v2 key
     try {
-      const savedPos = JSON.parse(localStorage.getItem('agy_hud_pill_pos') || 'null');
+      const savedPos = JSON.parse(localStorage.getItem('agy_hud_pill_pos_v2') || 'null');
       if (savedPos && typeof savedPos.x === 'number') {
-        const maxX = Math.max(10, window.innerWidth - 320);
+        const maxX = Math.max(10, window.innerWidth - 380);
         const maxY = Math.max(10, window.innerHeight - 50);
         hud.style.left = `${Math.min(Math.max(10, savedPos.x), maxX)}px`;
         hud.style.top = `${Math.min(Math.max(6, savedPos.y), maxY)}px`;
-        hud.style.right = 'auto';
+        hud.style.transform = 'none';
       }
     } catch(e) {}
 
@@ -1108,7 +1494,7 @@ math * {{
     let initialLeft = 0, initialTop = 0;
 
     hud.addEventListener('mousedown', (e) => {
-      if (e.target.closest('button') || e.target.closest('.agy-hud-btn')) return;
+      if (e.target.closest('button') || e.target.closest('.agy-hud-btn') || e.target.closest('.agy-quick-theme-btn')) return;
       isDragging = true;
       startX = e.clientX;
       startY = e.clientY;
@@ -1116,6 +1502,9 @@ math * {{
       initialLeft = rect.left;
       initialTop = rect.top;
 
+      hud.style.transform = 'none';
+      hud.style.left = `${initialLeft}px`;
+      hud.style.top = `${initialTop}px`;
       hud.style.transition = 'none';
       hud.style.cursor = 'grabbing';
       document.body.style.userSelect = 'none';
@@ -1132,7 +1521,6 @@ math * {{
         const maxY = window.innerHeight - hud.offsetHeight - 10;
         hud.style.left = `${Math.max(10, Math.min(newX, maxX))}px`;
         hud.style.top = `${Math.max(6, Math.min(newY, maxY))}px`;
-        hud.style.right = 'auto';
       };
 
       const onMouseUp = () => {
@@ -1146,7 +1534,7 @@ math * {{
 
         const finalRect = hud.getBoundingClientRect();
         try {
-          localStorage.setItem('agy_hud_pill_pos', JSON.stringify({ x: finalRect.left, y: finalRect.top }));
+          localStorage.setItem('agy_hud_pill_pos_v2', JSON.stringify({ x: finalRect.left, y: finalRect.top }));
         } catch(e) {}
       };
 
@@ -1155,11 +1543,54 @@ math * {{
     });
 
     // Buttons
-    document.getElementById('agy-btn-theme').onclick = () => openThemeModal();
-    document.getElementById('agy-btn-accounts').onclick = () => openAccountsModal();
+    const btnTheme = document.getElementById('agy-btn-theme');
+    const btnAccounts = document.getElementById('agy-btn-accounts');
+    if (btnTheme) btnTheme.onclick = () => openThemeModal();
+    if (btnAccounts) btnAccounts.onclick = () => openAccountsModal();
   }
 
-  // 10. Initialization & Observers
+  // 10. Native Status Bar Integration
+  function attachStatusBarButton() {
+    if (document.getElementById('agy-statusbar-theme-btn')) return;
+    const bar = document.querySelector('.part.statusbar .right-items') || 
+                document.querySelector('.part.statusbar') || 
+                document.getElementById('status.bar');
+    if (!bar) return;
+
+    const btn = document.createElement('div');
+    btn.id = 'agy-statusbar-theme-btn';
+    btn.className = 'statusbar-item right';
+    btn.style.cssText = 'cursor: pointer; display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; font-size: 11px; font-weight: 600; color: #00f0ff; line-height: 22px; user-select: none;';
+    btn.title = 'تنظیمات تم رنگی، نئون و فونت Antigravity (Alt + T)';
+    setHTML(btn, `<span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#00f0ff; box-shadow:0 0 6px #00f0ff;"></span> 🎨 تم و نئون`);
+    btn.onclick = () => openThemeModal();
+    bar.appendChild(btn);
+  }
+
+  // 11. Global Keyboard Shortcuts
+  window.addEventListener('keydown', (e) => {
+    if (e.altKey && (e.key === 't' || e.key === 'T' || e.key === 'ف')) {
+      e.preventDefault();
+      openThemeModal();
+    }
+    if (e.altKey && (e.key === 'a' || e.key === 'A' || e.key === 'ش')) {
+      e.preventDefault();
+      openAccountsModal();
+    }
+    if (e.key === 'Escape') {
+      const openModal = document.querySelector('.agy-modal-overlay.agy-open');
+      if (openModal) openModal.classList.remove('agy-open');
+    }
+  });
+
+  // Cross-window sync (when changed in one panel/window, update all)
+  window.addEventListener('storage', (e) => {
+    if (e.key === STORAGE_KEY) {
+      applyThemeAndFont();
+    }
+  });
+
+  // 12. Observers & Initialization
   applyThemeAndFont();
 
   const observer = new MutationObserver(mutations => {
@@ -1186,11 +1617,18 @@ math * {{
   const startAll = () => {
     applyThemeAndFont();
     renderHUD();
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-    scanAll(document.body);
-    setInterval(() => {
+    attachStatusBarButton();
+    if (document.body) {
+      observer.observe(document.body, { childList: true, subtree: true, characterData: true });
       scanAll(document.body);
-    }, 300);
+    }
+    setInterval(() => {
+      if (document.body) scanAll(document.body);
+      if (!document.getElementById('agy-hud-pill') && window === window.top) {
+        renderHUD();
+      }
+      attachStatusBarButton();
+    }, 400);
   };
 
   if (document.readyState === 'loading') {
@@ -1232,7 +1670,64 @@ math * {{
         else:
             print("✓ jetskiMain.tailwind.css already includes custom theme import")
 
-    # 6. Patch workbench.html & workbench-jetski-agent.html
+    # 6. Inject Enhancer into workbench.desktop.main.js & jetskiAgent/main.js
+    marker_start = "/* --- ANTIGRAVITY IDE THEME & ENHANCER SUITE BEGIN --- */"
+    marker_end = "/* --- ANTIGRAVITY IDE THEME & ENHANCER SUITE END --- */"
+    bundle_snippet = f"\n\n{marker_start}\n{enhancer_js}\n{marker_end}\n"
+
+    wb_js_path = wb_dir / "workbench.desktop.main.js"
+    if wb_js_path.exists():
+        wb_js_content = wb_js_path.read_text(encoding="utf-8")
+        bak_wb_js = wb_js_path.with_suffix(".js.bak")
+        if not bak_wb_js.exists():
+            shutil.copy2(wb_js_path, bak_wb_js)
+
+        if marker_start in wb_js_content and marker_end in wb_js_content:
+            before, rest = wb_js_content.split(marker_start, 1)
+            _, after = rest.split(marker_end, 1)
+            wb_js_content = f"{before}{marker_start}\n{enhancer_js}\n{marker_end}{after}"
+            wb_js_path.write_text(wb_js_content, encoding="utf-8")
+            print("✓ Updated enhancer code inside workbench.desktop.main.js")
+        else:
+            wb_js_path.write_text(wb_js_content + bundle_snippet, encoding="utf-8")
+            print("✓ Injected enhancer code into workbench.desktop.main.js")
+
+    # Also inject into jetskiAgent.js (agent module entrypoint)
+    jetski_agent_js = out_dir / "vs" / "code" / "electron-browser" / "workbench" / "jetskiAgent.js"
+    if jetski_agent_js.exists():
+        js_content = jetski_agent_js.read_text(encoding="utf-8")
+        bak_jetski = jetski_agent_js.with_suffix(".js.bak")
+        if not bak_jetski.exists():
+            shutil.copy2(jetski_agent_js, bak_jetski)
+
+        if marker_start in js_content and marker_end in js_content:
+            before, rest = js_content.split(marker_start, 1)
+            _, after = rest.split(marker_end, 1)
+            js_content = f"{before}{marker_start}\n{enhancer_js}\n{marker_end}{after}"
+            jetski_agent_js.write_text(js_content, encoding="utf-8")
+            print("✓ Updated enhancer code inside jetskiAgent.js")
+        else:
+            jetski_agent_js.write_text(js_content + bundle_snippet, encoding="utf-8")
+            print("✓ Injected enhancer code into jetskiAgent.js")
+
+    jetski_js_path = out_dir / "jetskiAgent" / "main.js"
+    if jetski_js_path.exists():
+        jetski_js_content = jetski_js_path.read_text(encoding="utf-8")
+        bak_jetski_main = jetski_js_path.with_suffix(".js.bak")
+        if not bak_jetski_main.exists():
+            shutil.copy2(jetski_js_path, bak_jetski_main)
+
+        if marker_start in jetski_js_content and marker_end in jetski_js_content:
+            before, rest = jetski_js_content.split(marker_start, 1)
+            _, after = rest.split(marker_end, 1)
+            jetski_js_content = f"{before}{marker_start}\n{enhancer_js}\n{marker_end}{after}"
+            jetski_js_path.write_text(jetski_js_content, encoding="utf-8")
+            print("✓ Updated enhancer code inside jetskiAgent/main.js")
+        else:
+            jetski_js_path.write_text(jetski_js_content + bundle_snippet, encoding="utf-8")
+            print("✓ Injected enhancer code into jetskiAgent/main.js")
+
+    # 7. Patch workbench.html & workbench-jetski-agent.html
     html_files = [
         out_dir / "vs" / "code" / "electron-browser" / "workbench" / "workbench.html",
         out_dir / "vs" / "code" / "electron-browser" / "workbench" / "workbench-jetski-agent.html"
@@ -1246,36 +1741,61 @@ math * {{
         if not bak.exists():
             shutil.copy2(html_path, bak)
 
-        # 6a. Update CSP to permit data: and fonts.jsdelivr
+        # 7a. Remove stale rtl-agents block if present
+        if "<!-- RTL-AGENTS-BEGIN -->" in content:
+            content = re.sub(r'\s*<!-- RTL-AGENTS-BEGIN -->.*?<!-- RTL-AGENTS-END -->', '', content, flags=re.DOTALL)
+
+        # 7b. Update CSP to permit data: and fonts.jsdelivr
         if "font-src" in content and "data:" not in content.split("font-src")[1].split(";")[0]:
             content = content.replace("font-src\n\t\t\t\t\t'self'", "font-src\n\t\t\t\t\t'self'\n\t\t\t\t\tdata:\n\t\t\t\t\thttps://cdn.jsdelivr.net")
 
-        # 6b. Add link to stylesheet if not present
+        # 7c. Add link to stylesheet in <head> if not present
         link_tag = '\t<link rel="stylesheet" href="../../../workbench/antigravity-custom-theme.css">\n'
         if "antigravity-custom-theme.css" not in content:
             content = content.replace("</head>", f"{link_tag}</head>")
 
-        # 6c. Add script tag if not present
-        script_tag = '<script src="../../../workbench/antigravity-ide-enhancer.js" type="module"></script>\n'
-        if "antigravity-ide-enhancer.js" not in content:
-            content = content.replace("</html>", f"{script_tag}</html>")
+        # 7d. Remove external enhancer script tags from HTML (now natively in bundles)
+        content = re.sub(r'\s*<script src="(?:\.\./)+workbench/antigravity-ide-enhancer\.js"[^>]*></script>', '', content)
+
+        # 7e. Ensure agent webview has continuous fixed neon gradient and transparent divs
+        if html_path.name == "workbench-jetski-agent.html":
+            agent_style = """\t<style id="agy-agent-bg-override">
+\t\t:root {
+\t\t\t--vscode-editor-background: transparent !important;
+\t\t\t--vscode-sideBar-background: transparent !important;
+\t\t\t--vscode-input-background: rgba(15, 23, 42, 0.88) !important;
+\t\t}
+\t\thtml, body {
+\t\t\tbackground-color: var(--agy-bg, #080c14) !important;
+\t\t\tbackground-image: var(--agy-bg-gradient, radial-gradient(ellipse 95% 70% at 50% -10%, rgba(0, 240, 255, 0.16) 0%, rgba(14, 28, 54, 0.72) 42%, #080c14 85%)) !important;
+\t\t\tbackground-attachment: fixed !important;
+\t\t\tbackground-size: cover !important;
+\t\t\tbackground-repeat: no-repeat !important;
+\t\t}
+\t\t.jetski-root, #root, [class*="jetski-root"], main.flex-1,
+\t\t.bg-agent-convo-background, .bg-background, .bg-sidebar-background, .bg-editor-background,
+\t\tdiv[class*="bg-background"], div[class*="bg-sidebar-background"], div[class*="bg-agent-convo-background"],
+\t\tdiv[class*="bg-zinc"], div[class*="bg-[#18181b]"], div[class*="bg-[#09090b]"], div[class*="bg-[#121212]"], div[class*="bg-neutral"], div[class*="bg-slate"] {
+\t\t\tbackground: transparent !important;
+\t\t\tbackground-color: transparent !important;
+\t\t}
+\t</style>\n"""
+            if "agy-agent-bg-override" not in content:
+                content = content.replace("</head>", f"{agent_style}</head>")
+            else:
+                content = re.sub(r'\t<style id="agy-agent-bg-override">.*?</style>\n', lambda m: agent_style, content, flags=re.DOTALL)
 
         html_path.write_text(content, encoding="utf-8")
         print(f"✓ Patched {html_path.name}")
 
-    # 7. Update product.json Checksums
+    # 7. Update product.json Checksums dynamically across all tracked entries
     prod_file = IDE_APP_DIR / "product.json"
     if prod_file.exists():
         with open(prod_file, "r", encoding="utf-8") as f:
             prod_data = json.load(f)
 
         checksums = prod_data.get("checksums", {})
-        tracked_keys = [
-            "vs/workbench/workbench.desktop.main.css",
-            "vs/code/electron-browser/workbench/workbench.html",
-            "vs/code/electron-browser/workbench/workbench-jetski-agent.html",
-            "jetskiMain.tailwind.css"
-        ]
+        tracked_keys = list(checksums.keys())
 
         updated_count = 0
         for rel in tracked_keys:

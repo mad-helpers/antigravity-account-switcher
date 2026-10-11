@@ -1,0 +1,76 @@
+
+              :root, html, body {
+                --background: transparent !important;
+                --color-background: transparent !important;
+              }
+              body {
+                background-color: #080c14 !important;
+                background-image: radial-gradient(ellipse 95% 70% at 50% -10%, rgba(0, 240, 255, 0.16) 0%, rgba(14, 28, 54, 0.72) 42%, #080c14 85%) !important;
+                background-size: cover !important;
+                background-position: center !important;
+                background-repeat: no-repeat !important;
+                background-attachment: scroll !important;
+              }
+              html, div.h-screen.w-screen, .theme-standalone {
+                background: transparent !important;
+                background-color: transparent !important;
+                background-image: none !important;
+                background-attachment: scroll !important;
+              }
+
+              /* Super Fast Top Bar Stacking Context */
+              div.h-screen.w-screen > div.shrink-0 {
+                position: relative !important;
+                z-index: 99999 !important;
+              }
+              [role="menu"],
+              [data-radix-menu-content],
+              [role="dialog"],
+              div[class*="menu-border"],
+              div.z-\[8000\],
+              div[class*="z-[8000]"],
+              [data-radix-popper-content-wrapper],
+              div[class*="popover"] {
+                position: absolute !important;
+                z-index: 100000 !important;
+                background: rgba(6, 9, 16, 0.96) !important;
+                border: 1px solid rgba(255, 255, 255, 0.15) !important;
+                box-shadow: 0 16px 48px rgba(0, 0, 0, 0.9), 0 0 1px rgba(255, 255, 255, 0.25) !important;
+                backdrop-filter: blur(8px) !important;
+                -webkit-backdrop-filter: blur(8px) !important;
+              }
+
+              /* Transparent workspace containers */
+              .bg-background, div.bg-background, main, [class*="main-content"] {
+                background: transparent !important;
+                background-color: transparent !important;
+              }
+
+              /* ONLY top-level sidebar container has blur and background */
+              aside.bg-sidebar,
+              [role="navigation"],
+              div.h-screen.w-screen > div.flex-1 > aside,
+              div.h-screen.w-screen > div.flex-1 > div:first-child {
+                background: rgba(6, 9, 16, 0.88) !important;
+                backdrop-filter: blur(6px) !important;
+                -webkit-backdrop-filter: blur(6px) !important;
+                border-right: 1px solid rgba(255, 255, 255, 0.06) !important;
+              }
+
+              /* ALL nested elements inside sidebar: zero extra blur passes! */
+              aside *, [role="navigation"] *, .bg-sidebar .bg-sidebar, .bg-sidebar button, .bg-sidebar div {
+                backdrop-filter: none !important;
+                -webkit-backdrop-filter: none !important;
+              }
+
+              header, [class*="titlebar"], [class*="Header"] {
+                background: rgba(6, 9, 16, 0.85) !important;
+                backdrop-filter: blur(6px) !important;
+                -webkit-backdrop-filter: blur(6px) !important;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.06) !important;
+              }
+              header *, [class*="titlebar"] * {
+                backdrop-filter: none !important;
+                -webkit-backdrop-filter: none !important;
+              }
+            

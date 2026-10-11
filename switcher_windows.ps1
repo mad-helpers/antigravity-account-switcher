@@ -21,6 +21,7 @@ param (
     [switch]$About,
     [switch]$GitHub,
     [switch]$CLI,
+    [switch]$IdeTheme,
     [switch]$Help
 )
 
@@ -297,8 +298,8 @@ function Open-LiquidGlassUI {
 
     # Generate standalone runner html with baked-in data for instant offline launch
     $templateHtml = Get-Content (Join-Path $AppDir "index.html") -Raw -Encoding UTF8
-    $injectedScript = "<script>`nwindow.INITIAL_PAYLOAD = { activeAccount: " + $quotaJson + ", savedAccounts: " + $manifestJson + " };`nwindow.INITIAL_CONVERSATIONS = " + $convsJson + ";`n</script>"
-    $runtimeHtml = $templateHtml.Replace("<!-- Scripts -->", "$injectedScript`n  <!-- Scripts -->")
+    $injectedScript = '<script>' + "`nwindow.INITIAL_PAYLOAD = { activeAccount: " + $quotaJson + ", savedAccounts: " + $manifestJson + " };`nwindow.INITIAL_CONVERSATIONS = " + $convsJson + ";`n" + '</script>'
+    $runtimeHtml = $templateHtml.Replace('<!-- Scripts -->', "$injectedScript`n  <!-- Scripts -->")
     $runtimePath = Join-Path $AppDir "runtime_window.html"
     $runtimeHtml | Set-Content $runtimePath -Encoding UTF8
 
@@ -333,8 +334,8 @@ if ($Help) {
     if (Test-Path $cliPy) {
         & python $cliPy --help
     } else {
-        Write-Host "`nAntigravity Account Switcher & Quota Monitor CLI" -ForegroundColor Cyan
-        Write-Host "Commands: -Usage, -List, -Switch <email>, -SetProjectQuota <proj> <email>, -LaunchInstance <slot>, -StatusJson, -Save, -Logout" -ForegroundColor White
+        Write-Host "`nAntigravity Account Switcher CLI" -ForegroundColor Cyan
+        Write-Host 'Commands: -Usage, -List, -Switch <email>, -SetProjectQuota <proj> <email>, -LaunchInstance <slot>, -StatusJson, -Save, -Logout' -ForegroundColor White
     }
     exit
 }
@@ -434,6 +435,15 @@ if ($Logout) {
         & python $cliPy --logout
     } else {
         Logout-And-Add
+    }
+    exit
+}
+
+if ($IdeTheme) {
+    if (Test-Path "$ScriptDir\setup_ide_theme.py") {
+        & python "$ScriptDir\setup_ide_theme.py"
+    } else {
+        & python "$HOME\.gemini\antigravity\bin\setup_ide_theme.py"
     }
     exit
 }

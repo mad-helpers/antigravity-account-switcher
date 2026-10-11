@@ -867,6 +867,19 @@
         box-shadow: 0 6px 25px rgba(0, 0, 0, 0.3), 0 0 20px ${theme.chipBg} !important;
       }
 
+      /* Fix Menu Bar & Dropdowns Stacking Context */
+      div.h-screen.w-screen > div.shrink-0 {
+        position: relative !important;
+        z-index: 99999 !important;
+      }
+      [data-radix-popper-content-wrapper],
+      [role="menu"],
+      [data-radix-menu-content],
+      [role="dialog"] {
+        z-index: 100000 !important;
+        pointer-events: auto !important;
+      }
+
       /* 1. Universal Chat, Prose, Markdown, Inputs & Prompts Typography */
       .markdown, [class*="prose"], .theme-standalone p, .theme-standalone li, .theme-standalone span,
       [data-testid*="user-input"], [data-testid*="user-input-step"] *, [data-testid*="chat-message"] *:not(pre):not(code),
