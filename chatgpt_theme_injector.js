@@ -44,12 +44,36 @@
     }
   }
 
+  // Dedicated Portal Root attached to document.documentElement (<html>) completely isolated from React DOM tree
+  function getPortalRoot() {
+    let portal = document.getElementById('cpe-portal-root');
+    if (!portal || !portal.isConnected) {
+      if (portal) portal.remove();
+      portal = document.createElement('div');
+      portal.id = 'cpe-portal-root';
+      portal.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483640;overflow:visible;';
+      const root = document.documentElement || document.body;
+      if (root) {
+        root.appendChild(portal);
+      }
+    }
+    return portal;
+  }
+
   function injectBase64Fonts() {
     let fontStyle = document.getElementById('cpe-embedded-fonts');
+    if (fontStyle && fontStyle.isConnected && fontStyle.textContent && fontStyle.textContent.length > 1000) {
+      return; // Already injected and active! Never re-assign textContent to avoid font reload FOIT.
+    }
     if (!fontStyle) {
       fontStyle = document.createElement('style');
       fontStyle.id = 'cpe-embedded-fonts';
-      ensureAppended(fontStyle);
+      const targetParent = document.head || document.documentElement;
+      if (targetParent) {
+        targetParent.appendChild(fontStyle);
+      } else {
+        ensureAppended(fontStyle);
+      }
     }
     fontStyle.textContent = `
       @font-face {
@@ -270,9 +294,10 @@
     const t = THEMES[s.theme] || THEMES.cyber;
     
     // Combine English (Latin) and Persian (Fa) fonts
-    const fontEnPart = (s.fontEn && s.fontEn !== 'system') ? `'${s.fontEn}', ` : '';
+    const fontEnPart = (s.fontEn && s.fontEn !== 'system') ? `'${s.fontEn}', ` : "'Outfit', ";
     const fontFaPart = (s.fontFa && s.fontFa !== 'system') ? `'${s.fontFa}', ` : "'Vazirmatn', ";
     const combinedFont = `${fontEnPart}${fontFaPart}sans-serif`;
+    const persianFont = `${fontFaPart}${fontEnPart}sans-serif`;
 
     // Stroke / Border Configuration
     let strokeCSS = '';
@@ -334,9 +359,21 @@
       `;
     }
 
-    dynamicStyleEl.textContent = `
+    if (!dynamicStyleEl || !dynamicStyleEl.isConnected) {
+      dynamicStyleEl = document.getElementById('cpe-dynamic-styles');
+      if (!dynamicStyleEl) {
+        dynamicStyleEl = document.createElement('style');
+        dynamicStyleEl.id = 'cpe-dynamic-styles';
+        const targetParent = document.head || document.documentElement;
+        if (targetParent) targetParent.appendChild(dynamicStyleEl);
+        else ensureAppended(dynamicStyleEl);
+      }
+    }
+
+    const generatedCss = `
       :root {
         --cpe-font: ${combinedFont};
+        --cpe-font-fa: ${persianFont};
         --cpe-font-size: ${s.fontSize}px;
         --cpe-accent: ${t.accent};
         --color-token-main-surface-primary: ${t.bg} !important;
@@ -377,7 +414,7 @@
       .cpe-rtl-text {
         line-height: 1.82 !important;
         font-size: var(--cpe-font-size) !important;
-        letter-spacing: -0.012em !important;
+        letter-spacing: normal !important;
       }
 
       /* 3. Background Theming */
@@ -531,23 +568,42 @@
         border-radius: 8px !important;
       }
 
-      /* 8. Strict Monospace Code Protection */
+      /* 8. Monospace Code & File Editor with Persian Vazirmatn Fallback */
       pre, code, kbd, samp, 
-      .cm-editor, .cm-content,
       [class*="font-mono"],
       [class*="terminal"],
       pre *, code * {
-        font-family: 'JetBrains Mono', 'Fira Code', Consolas, 'Courier New', monospace !important;
-        direction: ltr !important;
-        text-align: left !important;
-        unicode-bidi: isolate !important;
+        font-family: 'JetBrains Mono', 'Fira Code', 'Vazirmatn', Consolas, 'Courier New', monospace !important;
+        letter-spacing: normal !important;
       }
 
       pre {
+        direction: ltr !important;
+        text-align: left !important;
+        unicode-bidi: isolate !important;
         background: #0d1117 !important;
         border: 1px solid rgba(255, 255, 255, 0.12) !important;
         border-radius: 12px !important;
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4) !important;
+      }
+
+      /* CodeMirror & File Viewer Panels */
+      .cm-editor, .cm-content, .cm-scroller, [data-code], [data-content] {
+        font-family: 'JetBrains Mono', 'Fira Code', 'Vazirmatn', Consolas, monospace !important;
+        letter-spacing: normal !important;
+      }
+
+      /* CodeMirror & File Viewer BiDi Lines (Persian Markdown / Comments / Prose) */
+      .cm-line.cpe-rtl-text,
+      .cm-content .cpe-rtl-text,
+      [data-line].cpe-rtl-text,
+      [data-content].cpe-rtl-text,
+      .cm-markdown-list-item.cpe-rtl-text {
+        direction: rtl !important;
+        text-align: right !important;
+        font-family: var(--cpe-font-fa), 'Vazirmatn', sans-serif !important;
+        letter-spacing: normal !important;
+        unicode-bidi: plaintext !important;
       }
 
       /* 9. Strict Math / LaTeX / KaTeX Formula Protection */
@@ -574,7 +630,8 @@
       .cpe-rtl-text {
         direction: rtl !important;
         text-align: right !important;
-        font-family: var(--cpe-font) !important;
+        font-family: var(--cpe-font-fa), var(--cpe-font) !important;
+        letter-spacing: normal !important;
       }
       .cpe-ltr-text {
         direction: ltr !important;
@@ -597,7 +654,8 @@
         position: fixed;
         top: 14px;
         right: 80px;
-        z-index: 999999;
+        z-index: 2147483645;
+        pointer-events: auto !important;
         display: flex;
         align-items: center;
         gap: 6px;
@@ -653,7 +711,7 @@
         background: rgba(0, 0, 0, 0.72);
         backdrop-filter: blur(16px);
         -webkit-backdrop-filter: blur(16px);
-        z-index: 1000000;
+        z-index: 2147483646;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -666,7 +724,7 @@
 
       .cpe-modal-overlay.cpe-open {
         opacity: 1;
-        pointer-events: auto;
+        pointer-events: auto !important;
       }
 
       .cpe-modal-sheet {
@@ -688,11 +746,48 @@
         transform: scale(1);
       }
     `;
+
+    if (dynamicStyleEl.textContent !== generatedCss) {
+      dynamicStyleEl.textContent = generatedCss;
+    }
   }
   window.__chatgpt_enhanced_apply_theme = applyThemeAndFont;
 
   // 5. Intelligent BiDi & RTL Observer
   const PERSIAN_REGEX = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+
+  function patchDiffsContainers() {
+    try {
+      document.querySelectorAll('diffs-container').forEach(dc => {
+        if (!dc || !dc.shadowRoot) return;
+        let style = dc.shadowRoot.getElementById('cpe-diffs-styles');
+        if (!style) {
+          style = document.createElement('style');
+          style.id = 'cpe-diffs-styles';
+          dc.shadowRoot.appendChild(style);
+        }
+        style.textContent = `
+          :host, [data-code], [data-content], [data-line] {
+            font-family: 'JetBrains Mono', 'Fira Code', 'Vazirmatn', Consolas, monospace !important;
+            letter-spacing: normal !important;
+          }
+          .cpe-rtl-text, [data-line].cpe-rtl-text, [data-content].cpe-rtl-text {
+            direction: rtl !important;
+            text-align: right !important;
+            font-family: 'Vazirmatn', sans-serif !important;
+            letter-spacing: normal !important;
+            unicode-bidi: plaintext !important;
+          }
+        `;
+        dc.shadowRoot.querySelectorAll('[data-line], [data-content], span').forEach(el => {
+          const text = el.textContent || '';
+          if (PERSIAN_REGEX.test(text.substring(0, 100))) {
+            el.classList.add('cpe-rtl-text');
+          }
+        });
+      });
+    } catch(e) {}
+  }
 
   function processBiDi(node) {
     if (!node || node.nodeType !== Node.ELEMENT_NODE) return;
@@ -705,13 +800,17 @@
     const s = loadSettings();
     if (!s.rtlAuto) return;
 
-    const targets = node.querySelectorAll ? node.querySelectorAll('p, li, [data-message-author-role], .sidebar-navigation span') : [];
+    patchDiffsContainers();
+
+    const targets = node.querySelectorAll ? node.querySelectorAll(
+      'p, li, h1, h2, h3, h4, h5, h6, blockquote, [data-message-author-role], .sidebar-navigation span, .cm-line, [data-line], [data-content], article, [class*="markdown"], [class*="Markdown"], [class*="viewer"] *'
+    ) : [];
     const elementsToCheck = [node, ...targets];
 
     elementsToCheck.forEach(el => {
       if (el.tagName === 'PRE' || el.tagName === 'CODE' || el.closest('pre, code, .katex, math')) return;
       const text = el.textContent || '';
-      if (PERSIAN_REGEX.test(text.substring(0, 80))) {
+      if (PERSIAN_REGEX.test(text.substring(0, 100))) {
         if (!el.classList.contains('cpe-rtl-text')) {
           el.classList.add('cpe-rtl-text');
           el.classList.remove('cpe-ltr-text');
@@ -741,6 +840,9 @@
     for (const m of mutations) {
       for (const node of m.addedNodes) {
         if (node.nodeType === 1 && node.tagName !== 'SCRIPT' && node.tagName !== 'STYLE') {
+          if (node.id === 'cpe-portal-root' || node.id === 'cpe-hud-pill' || (node.closest && node.closest('#cpe-portal-root'))) {
+            continue;
+          }
           queueBiDi(node);
         }
       }
@@ -758,10 +860,14 @@
   // 6. Draggable Floating Action HUD UI
   function renderHUD() {
     let hud = document.getElementById('cpe-hud-pill');
+    if (hud && hud.isConnected) {
+      return hud;
+    }
     if (hud) hud.remove();
 
     hud = document.createElement('div');
     hud.id = 'cpe-hud-pill';
+    hud.style.pointerEvents = 'auto';
 
     hud.innerHTML = `
       <span id="cpe-hud-drag-handle" style="cursor: grab; display: flex; align-items: center; gap: 4px; padding: 2px 4px; border-radius: 6px; user-select: none;" title="برای جابه‌جایی نوار، اینجا را بگیرید و بکشید">
@@ -783,46 +889,77 @@
       </button>
     `;
 
-    const parentEl = document.body || document.documentElement;
-    if (parentEl) {
-      parentEl.appendChild(hud);
+    const portal = getPortalRoot();
+    if (portal) {
+      portal.appendChild(hud);
     } else {
       ensureAppended(hud);
     }
 
-    // Restore saved position
+    // Restore saved position with strict bounds
     try {
       const savedPos = JSON.parse(localStorage.getItem('cpe_hud_pill_pos') || 'null');
       if (savedPos && typeof savedPos.x === 'number') {
         const maxX = Math.max(10, window.innerWidth - 380);
-        const maxY = Math.max(10, window.innerHeight - 60);
+        // STRICT: HUD must remain in top banner area (Y between 8 and 180px)
         const clampedX = Math.min(Math.max(10, savedPos.x), maxX);
-        const clampedY = Math.min(Math.max(10, savedPos.y), maxY);
+        const clampedY = Math.min(Math.max(8, savedPos.y), 180);
         hud.style.left = `${clampedX}px`;
         hud.style.top = `${clampedY}px`;
         hud.style.right = 'auto';
       }
     } catch(e) {}
 
-    // Make HUD Draggable
+    // Make HUD Draggable using Pointer Capture ONLY on the drag handle
+    const dragHandle = document.getElementById('cpe-hud-drag-handle');
     let isDragging = false;
     let startX = 0, startY = 0;
     let initialLeft = 0, initialTop = 0;
 
-    hud.addEventListener('mousedown', (e) => {
-      if (e.target.closest('button') || e.target.closest('.cpe-hud-btn')) return;
-      isDragging = true;
-      startX = e.clientX;
-      startY = e.clientY;
-      const rect = hud.getBoundingClientRect();
-      initialLeft = rect.left;
-      initialTop = rect.top;
+    const stopDragging = (ev) => {
+      if (!isDragging) return;
+      isDragging = false;
+      hud.style.transition = 'transform 0.15s ease, box-shadow 0.2s ease';
+      hud.style.cursor = '';
+      if (dragHandle) {
+        dragHandle.style.cursor = 'grab';
+        try {
+          if (ev && ev.pointerId && dragHandle.hasPointerCapture(ev.pointerId)) {
+            dragHandle.releasePointerCapture(ev.pointerId);
+          }
+        } catch(err) {}
+      }
+      document.body.style.userSelect = '';
+      const finalRect = hud.getBoundingClientRect();
+      try {
+        localStorage.setItem('cpe_hud_pill_pos', JSON.stringify({ 
+          x: Math.round(finalRect.left), 
+          y: Math.min(Math.max(8, Math.round(finalRect.top)), 180) 
+        }));
+      } catch(e) {}
+    };
 
-      hud.style.transition = 'none';
-      hud.style.cursor = 'grabbing';
-      document.body.style.userSelect = 'none';
+    if (dragHandle) {
+      dragHandle.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return; // Left mouse click only
+        e.preventDefault();
+        e.stopPropagation();
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        const rect = hud.getBoundingClientRect();
+        initialLeft = rect.left;
+        initialTop = rect.top;
 
-      const onMouseMove = (ev) => {
+        hud.style.transition = 'none';
+        dragHandle.style.cursor = 'grabbing';
+        document.body.style.userSelect = 'none';
+        try {
+          dragHandle.setPointerCapture(e.pointerId);
+        } catch(err) {}
+      });
+
+      dragHandle.addEventListener('pointermove', (ev) => {
         if (!isDragging) return;
         const dx = ev.clientX - startX;
         const dy = ev.clientY - startY;
@@ -830,34 +967,33 @@
         let newX = initialLeft + dx;
         let newY = initialTop + dy;
 
-        const maxX = window.innerWidth - hud.offsetWidth - 10;
-        const maxY = window.innerHeight - hud.offsetHeight - 10;
+        const maxX = Math.max(10, window.innerWidth - hud.offsetWidth - 10);
+        // STRICT TOP CLAMP: Prevent ever moving into bottom area / composer / (+) button
+        const maxY = Math.min(180, Math.floor(window.innerHeight * 0.25));
         newX = Math.max(10, Math.min(newX, maxX));
-        newY = Math.max(10, Math.min(newY, maxY));
+        newY = Math.max(8, Math.min(newY, maxY));
 
         hud.style.left = `${newX}px`;
         hud.style.top = `${newY}px`;
         hud.style.right = 'auto';
-      };
+      });
 
-      const onMouseUp = () => {
-        if (!isDragging) return;
-        isDragging = false;
-        hud.style.transition = 'transform 0.15s ease, box-shadow 0.2s ease';
-        hud.style.cursor = 'grab';
-        document.body.style.userSelect = '';
-        document.removeEventListener('mousemove', onMouseMove);
-        document.removeEventListener('mouseup', onMouseUp);
+      dragHandle.addEventListener('pointerup', stopDragging);
+      dragHandle.addEventListener('pointercancel', stopDragging);
+      dragHandle.addEventListener('lostpointercapture', stopDragging);
 
-        const finalRect = hud.getBoundingClientRect();
-        try {
-          localStorage.setItem('cpe_hud_pill_pos', JSON.stringify({ x: finalRect.left, y: finalRect.top }));
-        } catch(e) {}
-      };
+      // Double-click to instantly dock/reset back to top header
+      dragHandle.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        hud.style.top = '14px';
+        hud.style.right = '80px';
+        hud.style.left = 'auto';
+        localStorage.removeItem('cpe_hud_pill_pos');
+        showToast('📌 نوار در بالای صفحه فیکس شد');
+      });
+    }
 
-      document.addEventListener('mousemove', onMouseMove);
-      document.addEventListener('mouseup', onMouseUp);
-    });
+    window.addEventListener('blur', stopDragging);
 
     // Button Events
     document.getElementById('cpe-btn-new-chat').onclick = () => {
@@ -920,7 +1056,9 @@
       pointer-events: none;
     `;
     t.textContent = msg;
-    ensureAppended(t);
+    const portal = getPortalRoot();
+    if (portal) portal.appendChild(t);
+    else ensureAppended(t);
     setTimeout(() => {
       if (t) {
         t.style.opacity = '0';
@@ -939,7 +1077,7 @@
     overlay.className = 'cpe-modal-overlay';
 
     overlay.innerHTML = `
-      <div class="cpe-modal-sheet">
+      <div class="cpe-modal-sheet" style="pointer-events: auto !important;">
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 12px;">
           <h3 style="margin: 0; font-size: 16px; font-weight: 700; color: #00f0ff;">${title}</h3>
           <button style="background: none; border: none; color: #94a3b8; font-size: 20px; cursor: pointer;" onclick="this.closest('.cpe-modal-overlay').classList.remove('cpe-open')">✕</button>
@@ -948,7 +1086,9 @@
       </div>
     `;
 
-    ensureAppended(overlay);
+    const portal = getPortalRoot();
+    if (portal) portal.appendChild(overlay);
+    else ensureAppended(overlay);
     overlay.addEventListener('click', (e) => {
       if (e.target === overlay) overlay.classList.remove('cpe-open');
     });
@@ -1579,14 +1719,21 @@
     window.__cpe_watchdog_active = true;
     setInterval(() => {
       try {
-        if (!document.getElementById('cpe-hud-pill')) {
+        const hud = document.getElementById('cpe-hud-pill');
+        if (!hud || !hud.isConnected) {
           renderHUD();
         }
-        if (!document.getElementById('cpe-dynamic-styles')) {
+        const dynamicStyle = document.getElementById('cpe-dynamic-styles');
+        if (!dynamicStyle || !dynamicStyle.isConnected) {
           applyThemeAndFont();
         }
+        const portal = document.getElementById('cpe-portal-root');
+        if (!portal || !portal.isConnected) {
+          getPortalRoot();
+          renderHUD();
+        }
       } catch (e) {}
-    }, 1500);
+    }, 2500);
   }
 
   console.log('[ChatGPT Enhanced] UI Enhancement Suite Successfully Mounted!');
