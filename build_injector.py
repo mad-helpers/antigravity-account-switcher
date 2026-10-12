@@ -423,14 +423,26 @@ template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & M
       .ProseMirror,
       [contenteditable="true"],
       p,
-      span:not(.katex *):not(pre *):not(code *):not([class*="font-mono"]):not([class*="icon"]):not(svg *),
       bdi,
       h1, h2, h3, h4, h5, h6,
-      button:not(.katex *):not(pre *):not(code *):not([class*="icon"]),
       input,
       textarea,
       label {
-        font-family: var(--cpe-font) !important;
+        font-family: var(--cpe-font);
+      }
+
+      /* Layout Container Direction Protections (Prevent Inverting Grid/Flex & Scroll Anchors) */
+      [class*="_transcriptContent_"],
+      .thread-scroll-container,
+      [class*="thread-scroll-layout"],
+      div[data-turn-key],
+      div[data-testid*="turn"],
+      div[class*="group/user-message"],
+      div[class*="_ComposerLayoutRoot_"],
+      div[class*="_MainContent_"],
+      div[class*="_Workspace_"],
+      main {
+        direction: ltr !important;
       }
 
       /* 2. Reading Flow & Line Height */
@@ -652,16 +664,38 @@ template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & M
         box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25) !important;
       }
 
-      /* 10. BiDi Text Alignment */
-      .cpe-rtl-text {
+      /* 10. BiDi Text Alignment on Leaf Content Elements Only */
+      p.cpe-rtl-text,
+      li.cpe-rtl-text,
+      h1.cpe-rtl-text,
+      h2.cpe-rtl-text,
+      h3.cpe-rtl-text,
+      h4.cpe-rtl-text,
+      h5.cpe-rtl-text,
+      h6.cpe-rtl-text,
+      blockquote.cpe-rtl-text,
+      span.cpe-rtl-text {
         direction: rtl !important;
         text-align: right !important;
         font-family: var(--cpe-font-fa), var(--cpe-font) !important;
         letter-spacing: normal !important;
+        unicode-bidi: plaintext !important;
       }
-      .cpe-ltr-text {
+      p.cpe-ltr-text,
+      li.cpe-ltr-text {
         direction: ltr !important;
         text-align: left !important;
+        unicode-bidi: plaintext !important;
+      }
+
+      /* Inline Code Badges Inside Persian Sentences (Isolate Direction & Metrics) */
+      :not(pre) > code,
+      [class*="_InlineCode_"] {
+        direction: ltr !important;
+        unicode-bidi: isolate !important;
+        text-align: left !important;
+        font-family: 'JetBrains Mono', 'Fira Code', 'Vazirmatn', Consolas, monospace !important;
+        font-size: 0.9em !important;
       }
 
       /* 11. Accent Highlights */
@@ -779,8 +813,9 @@ template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & M
   }
   window.__chatgpt_enhanced_apply_theme = applyThemeAndFont;
 
-  // 5. Intelligent BiDi & RTL Observer
+  // 5. Intelligent BiDi & RTL Observer (Strictly Leaf-Targeted)
   const PERSIAN_REGEX = /[\\u0600-\\u06FF\\u0750-\\u077F\\u08A0-\\u08FF\\uFB50-\\uFDFF\\uFE70-\\uFEFF]/;
+  const LEAF_TEXT_TAGS = new Set(['P', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE']);
 
   function patchDiffsContainers() {
     try {
@@ -797,7 +832,7 @@ template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & M
             font-family: 'JetBrains Mono', 'Fira Code', 'Vazirmatn', Consolas, monospace !important;
             letter-spacing: normal !important;
           }
-          .cpe-rtl-text, [data-line].cpe-rtl-text, [data-content].cpe-rtl-text {
+          [data-line].cpe-rtl-text, [data-content].cpe-rtl-text {
             direction: rtl !important;
             text-align: right !important;
             font-family: 'Vazirmatn', sans-serif !important;
@@ -805,44 +840,68 @@ template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & M
             unicode-bidi: plaintext !important;
           }
         `;
-        dc.shadowRoot.querySelectorAll('[data-line], [data-content], span').forEach(el => {
-          const text = el.textContent || '';
-          if (PERSIAN_REGEX.test(text.substring(0, 100))) {
-            el.classList.add('cpe-rtl-text');
+        dc.shadowRoot.querySelectorAll('[data-line], [data-content]').forEach(el => {
+          if (el.children.length === 0) {
+            const text = el.textContent || '';
+            if (PERSIAN_REGEX.test(text.substring(0, 100))) {
+              el.classList.add('cpe-rtl-text');
+            }
           }
         });
       });
     } catch(e) {}
   }
 
+  function shouldCheckElement(el) {
+    if (!el || el.nodeType !== 1) return false;
+    const tag = el.tagName;
+    if (tag === 'PRE' || tag === 'CODE' || tag === 'SVG' || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON') return false;
+    if (el.id === 'cpe-portal-root' || el.id === 'cpe-hud-pill' || (el.closest && el.closest('#cpe-portal-root, #cpe-hud-pill, pre, code, .katex, math'))) {
+      return false;
+    }
+    if (LEAF_TEXT_TAGS.has(tag)) return true;
+    if (el.classList.contains('cm-line')) return true;
+    if (el.hasAttribute('data-line') || el.hasAttribute('data-content')) return true;
+    if (tag === 'SPAN' && (el.classList.contains('_clipViewport_a3okg_20') || el.closest('.sidebar-item, .sidebar-navigation'))) {
+      return el.children.length === 0;
+    }
+    return false;
+  }
+
   function processBiDi(node) {
     if (!node || node.nodeType !== Node.ELEMENT_NODE) return;
-    
-    // Skip code blocks and math formulas
-    if (node.tagName === 'PRE' || node.tagName === 'CODE' || node.closest('pre, code, .katex, math')) {
-      return;
-    }
-
     const s = loadSettings();
     if (!s.rtlAuto) return;
 
     patchDiffsContainers();
 
-    const targets = node.querySelectorAll ? node.querySelectorAll(
-      'p, li, h1, h2, h3, h4, h5, h6, blockquote, [data-message-author-role], .sidebar-navigation span, .cm-line, [data-line], [data-content], article, [class*="markdown"], [class*="Markdown"], [class*="viewer"] *'
-    ) : [];
-    const elementsToCheck = [node, ...targets];
+    const candidates = [];
+    if (shouldCheckElement(node)) {
+      candidates.push(node);
+    }
+    if (node.querySelectorAll) {
+      const found = node.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, .cm-line, [data-line], [data-content], .sidebar-item span');
+      for (let i = 0; i < found.length; i++) {
+        if (shouldCheckElement(found[i])) {
+          candidates.push(found[i]);
+        }
+      }
+    }
 
-    elementsToCheck.forEach(el => {
-      if (el.tagName === 'PRE' || el.tagName === 'CODE' || el.closest('pre, code, .katex, math')) return;
-      const text = el.textContent || '';
+    for (let i = 0; i < candidates.length; i++) {
+      const el = candidates[i];
+      const text = el.innerText || el.textContent || '';
       if (PERSIAN_REGEX.test(text.substring(0, 100))) {
         if (!el.classList.contains('cpe-rtl-text')) {
           el.classList.add('cpe-rtl-text');
           el.classList.remove('cpe-ltr-text');
         }
+      } else {
+        if (el.classList.contains('cpe-rtl-text')) {
+          el.classList.remove('cpe-rtl-text');
+        }
       }
-    });
+    }
   }
 
   let bidiTimer = null;
