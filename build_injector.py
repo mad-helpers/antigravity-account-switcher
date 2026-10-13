@@ -13,16 +13,8 @@ def resolve_font(filename):
     return FONTS_DIR / filename
 
 vazir_file = resolve_font("Vazirmatn[wght].woff2")
-estedad_file = resolve_font("Estedad[wght].woff2")
-outfit_file = resolve_font("Outfit[wght].woff2")
-
 vazir_b64 = base64.b64encode(vazir_file.read_bytes()).decode('ascii') if vazir_file.exists() else ""
-estedad_b64 = base64.b64encode(estedad_file.read_bytes()).decode('ascii') if estedad_file.exists() else ""
-outfit_b64 = base64.b64encode(outfit_file.read_bytes()).decode('ascii') if outfit_file.exists() else ""
-
-print(f"Vazirmatn b64: {len(vazir_b64)} chars")
-print(f"Estedad b64: {len(estedad_b64)} chars")
-print(f"Outfit b64: {len(outfit_b64)} chars")
+print(f"Vazirmatn b64: {len(vazir_b64)} chars (Ultra-lightweight single font bundle)")
 
 template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & Modern Glass)
 // Integrated with Antigravity Account Switcher, Local WOFF2 Fonts (Outfit + Vazirmatn + Estedad), Draggable HUD & KaTeX Math Protection
@@ -41,10 +33,8 @@ template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & M
     if (el) el.remove();
   });
 
-  // 1. Embedded Base64 Offline WOFF2 Fonts (Zero CDN dependencies, immune to CSP & filtering)
+  // 1. Embedded Base64 Offline WOFF2 Fonts (Zero CDN dependencies, ultra-lightweight)
   const VAZIRMATN_B64 = "__VAZIR_B64__";
-  const ESTEDAD_B64 = "__ESTEDAD_B64__";
-  const OUTFIT_B64 = "__OUTFIT_B64__";
 
   function safeAppend(el) {
     if (!el) return false;
@@ -88,8 +78,8 @@ template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & M
 
   function injectBase64Fonts() {
     let fontStyle = document.getElementById('cpe-embedded-fonts');
-    if (fontStyle && fontStyle.isConnected && fontStyle.textContent && fontStyle.textContent.length > 1000) {
-      return; // Already injected and active! Never re-assign textContent to avoid font reload FOIT.
+    if (fontStyle && fontStyle.isConnected && fontStyle.textContent && fontStyle.textContent.length > 500) {
+      return;
     }
     if (!fontStyle) {
       fontStyle = document.createElement('style');
@@ -103,32 +93,16 @@ template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & M
     }
     fontStyle.textContent = `
       @font-face {
-        font-family: 'Outfit';
-        font-style: normal;
-        font-weight: 100 900;
-        font-display: swap;
-        src: url('data:font/woff2;base64,${OUTFIT_B64}') format('woff2');
-      }
-      @font-face {
         font-family: 'Vazirmatn';
         font-style: normal;
         font-weight: 100 900;
         font-display: swap;
-        src: url('data:font/woff2;base64,${VAZIRMATN_B64}') format('woff2');
-      }
-      @font-face {
-        font-family: 'Estedad';
-        font-style: normal;
-        font-weight: 100 900;
-        font-display: swap;
-        src: url('data:font/woff2;base64,${ESTEDAD_B64}') format('woff2');
+        src: local('Vazirmatn'), local('Vazir'), url('data:font/woff2;base64,${VAZIRMATN_B64}') format('woff2');
       }
     `;
 
     if (document.fonts) {
-      try { document.fonts.load('16px Outfit'); } catch(e) {}
       try { document.fonts.load('16px Vazirmatn'); } catch(e) {}
-      try { document.fonts.load('16px Estedad'); } catch(e) {}
     }
   }
   injectBase64Fonts();
@@ -137,7 +111,7 @@ template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & M
   const STORAGE_KEY = 'cpe_chatgpt_suite_settings';
   const DEFAULT_SETTINGS = {
     fontFa: 'Vazirmatn',
-    fontEn: 'Outfit',
+    fontEn: 'system',
     theme: 'cyber',
     strokeMode: 'refined',
     rtlAuto: true,
@@ -149,10 +123,6 @@ template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & M
     try {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
       const s = { ...DEFAULT_SETTINGS, ...saved };
-      // Default to Outfit if fontEn was never selected or was empty
-      if (!s.fontEn || s.fontEn === 'default') {
-        s.fontEn = 'Outfit';
-      }
       cachedSettings = s;
       return s;
     } catch (e) {
@@ -330,11 +300,11 @@ template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & M
     const s = getSettings();
     const t = THEMES[s.theme] || THEMES.cyber;
     
-    // Combine English (Latin) and Persian (Fa) fonts
-    const fontEnPart = (s.fontEn && s.fontEn !== 'system') ? `'${s.fontEn}', ` : "'Outfit', ";
-    const fontFaPart = (s.fontFa && s.fontFa !== 'system') ? `'${s.fontFa}', ` : "'Vazirmatn', ";
-    const combinedFont = `${fontEnPart}${fontFaPart}sans-serif`;
-    const persianFont = `${fontFaPart}${fontEnPart}sans-serif`;
+    // Combine English (Latin) and Persian (Fa) fonts with ultra-light system fallbacks
+    const fontFaPart = "'Vazirmatn', ";
+    const fontEnPart = (s.fontEn && s.fontEn !== 'system') ? `'${s.fontEn}', ` : "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif, ";
+    const combinedFont = `${fontFaPart}${fontEnPart}sans-serif`;
+    const persianFont = `${fontFaPart}sans-serif`;
 
     // Stroke / Border Configuration
     let strokeCSS = '';
@@ -418,27 +388,21 @@ template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & M
         --color-background-composer-action-bar: ${t.card} !important;
       }
 
-      /* 1. Universal Typography Across Entire UI */
+      /* 1. Universal High-Performance Typography Inheritance */
       body,
-      aside,
-      nav,
-      main,
-      header,
-      #app-shell-sidebar,
-      .sidebar-navigation,
-      [class*="sidebar"],
-      [class*="LeftPanel"],
-      [class*="MainContent"],
+      input,
+      textarea,
+      button,
+      select,
+      label,
       [data-message-author-role],
       .prose,
       .ProseMirror,
       [contenteditable="true"],
       p,
+      li,
       bdi,
-      h1, h2, h3, h4, h5, h6,
-      input,
-      textarea,
-      label {
+      h1, h2, h3, h4, h5, h6 {
         font-family: var(--cpe-font);
       }
 
@@ -509,11 +473,9 @@ template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & M
         outline: none !important;
       }
 
-      /* Single sleek card for the actual composer */
+      /* Single sleek card for the actual composer (zero GPU blur overhead) */
       div[class*="_ComposerLayoutRoot_"] {
         background: ${t.composerBg} !important;
-        backdrop-filter: blur(20px) !important;
-        -webkit-backdrop-filter: blur(20px) !important;
         border-radius: 20px !important;
         transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
         overflow: hidden !important;
@@ -826,51 +788,20 @@ template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & M
 
   // 5. Ultra-Fast BiDi & RTL Engine (Zero-Reflow, WeakSet Cached, RAF Scheduled)
   const PERSIAN_REGEX = /[\\u0600-\\u06FF\\u0750-\\u077F\\u08A0-\\u08FF\\uFB50-\\uFDFF\\uFE70-\\uFEFF]/;
-  const LEAF_TEXT_TAGS = { P: 1, LI: 1, H1: 1, H2: 1, H3: 1, H4: 1, H5: 1, H6: 1, BLOCKQUOTE: 1 };
   const processedBiDiElements = new WeakSet();
   const pendingBiDiElements = new Set();
   let bidiScheduled = false;
-
-  function patchDiffsContainers() {
-    try {
-      const containers = document.querySelectorAll('diffs-container');
-      for (let i = 0; i < containers.length; i++) {
-        const dc = containers[i];
-        if (!dc || !dc.shadowRoot || dc.__cpe_patched) continue;
-        dc.__cpe_patched = true;
-        let style = dc.shadowRoot.getElementById('cpe-diffs-styles');
-        if (!style) {
-          style = document.createElement('style');
-          style.id = 'cpe-diffs-styles';
-          dc.shadowRoot.appendChild(style);
-        }
-        style.textContent = `
-          :host, [data-code], [data-content], [data-line] {
-            font-family: 'JetBrains Mono', 'Fira Code', 'Vazirmatn', Consolas, monospace !important;
-            letter-spacing: normal !important;
-          }
-          [data-line].cpe-rtl-text, [data-content].cpe-rtl-text {
-            direction: rtl !important;
-            text-align: right !important;
-            font-family: 'Vazirmatn', sans-serif !important;
-            letter-spacing: normal !important;
-            unicode-bidi: plaintext !important;
-          }
-        `;
-        const lines = dc.shadowRoot.querySelectorAll('[data-line], [data-content]');
-        for (let j = 0; j < lines.length; j++) {
-          const el = lines[j];
-          if (el.children.length === 0 && !processedBiDiElements.has(el)) {
-            processedBiDiElements.add(el);
-            const text = (el.textContent || '').slice(0, 80);
-            if (PERSIAN_REGEX.test(text)) {
-              el.classList.add('cpe-rtl-text');
-            }
-          }
-        }
-      }
-    } catch(e) {}
-  }
+  const LEAF_TEXT_TAGS = {
+    P: true,
+    LI: true,
+    H1: true,
+    H2: true,
+    H3: true,
+    H4: true,
+    H5: true,
+    H6: true,
+    BLOCKQUOTE: true
+  };
 
   function queueElementForBiDi(el) {
     if (!el || el.nodeType !== 1 || processedBiDiElements.has(el)) return;
@@ -883,54 +814,51 @@ template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & M
       return;
     }
 
-    if (LEAF_TEXT_TAGS[tag] || el.classList.contains('cm-line') || el.hasAttribute('data-line') || el.hasAttribute('data-content')) {
+    if (LEAF_TEXT_TAGS[tag]) {
       pendingBiDiElements.add(el);
       return;
     }
 
-    if (tag === 'SPAN' && (el.classList.contains('_clipViewport_a3okg_20') || el.closest('.sidebar-item, .sidebar-navigation'))) {
-      if (el.children.length === 0) {
-        pendingBiDiElements.add(el);
-        return;
-      }
+    if (el.classList && (el.classList.contains('cm-line') || el.classList.contains('_clipViewport_a3okg_20'))) {
+      pendingBiDiElements.add(el);
+      return;
     }
 
-    if (el.children.length > 0) {
-      const leaves = el.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, .cm-line, [data-line], [data-content], diffs-container, .sidebar-item span');
-      for (let i = 0; i < leaves.length; i++) {
-        const leaf = leaves[i];
-        if (leaf.tagName === 'DIFFS-CONTAINER') {
-          patchDiffsContainers();
-        } else if (!processedBiDiElements.has(leaf)) {
-          pendingBiDiElements.add(leaf);
-        }
+    // High performance leaf collector using native getElementsByTagName (avoids CSS selector engine)
+    if (el.childElementCount > 0) {
+      const ps = el.getElementsByTagName('p');
+      for (let i = 0; i < ps.length; i++) {
+        const p = ps[i];
+        if (!processedBiDiElements.has(p)) pendingBiDiElements.add(p);
+      }
+      const lis = el.getElementsByTagName('li');
+      for (let i = 0; i < lis.length; i++) {
+        const li = lis[i];
+        if (!processedBiDiElements.has(li)) pendingBiDiElements.add(li);
       }
     }
   }
 
   function flushBiDi() {
     bidiScheduled = false;
+    if (pendingBiDiElements.size === 0) return;
     const s = getSettings();
     if (!s.rtlAuto) {
       pendingBiDiElements.clear();
       return;
     }
 
-    const items = Array.from(pendingBiDiElements);
-    pendingBiDiElements.clear();
-    if (items.length === 0) return;
-
-    for (let i = 0; i < items.length; i++) {
-      const el = items[i];
+    for (const el of pendingBiDiElements) {
       if (!el || !el.isConnected || processedBiDiElements.has(el)) continue;
       processedBiDiElements.add(el);
 
       // Fast textContent slice avoids triggering layout reflow
-      const text = (el.textContent || '').slice(0, 80);
+      const text = (el.textContent || '').slice(0, 50);
       if (PERSIAN_REGEX.test(text)) {
         el.classList.add('cpe-rtl-text');
       }
     }
+    pendingBiDiElements.clear();
   }
 
   function scheduleBiDi() {
@@ -939,7 +867,7 @@ template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & M
     if (typeof requestAnimationFrame === 'function' && document.visibilityState === 'visible') {
       requestAnimationFrame(flushBiDi);
     } else {
-      setTimeout(flushBiDi, 16);
+      setTimeout(flushBiDi, 20);
     }
   }
 
@@ -964,15 +892,18 @@ template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & M
   });
   window.__cpe_observer = observer;
 
-  if (document.body) {
-    observer.observe(document.body, { childList: true, subtree: true });
-    queueElementForBiDi(document.body);
+  // Observe main container to avoid unnecessary sidebar / modal mutations
+  const targetObs = document.querySelector('main') || document.body;
+  if (targetObs) {
+    observer.observe(targetObs, { childList: true, subtree: true });
+    queueElementForBiDi(targetObs);
     scheduleBiDi();
   } else {
     document.addEventListener('DOMContentLoaded', () => {
-      if (document.body) {
-        observer.observe(document.body, { childList: true, subtree: true });
-        queueElementForBiDi(document.body);
+      const root = document.querySelector('main') || document.body;
+      if (root) {
+        observer.observe(root, { childList: true, subtree: true });
+        queueElementForBiDi(root);
         scheduleBiDi();
       }
     }, { once: true });
@@ -1838,30 +1769,14 @@ template = '''// ChatGPT Desktop & Codex Enhanced UI Suite (Ultimate Persian & M
 
   if (window.__cpe_watchdog_timer) {
     clearInterval(window.__cpe_watchdog_timer);
+    window.__cpe_watchdog_timer = null;
   }
-  window.__cpe_watchdog_timer = setInterval(() => {
-    try {
-      const hud = document.getElementById('cpe-hud-pill');
-      if (!hud || !hud.isConnected) {
-        renderHUD();
-      }
-      const dynamicStyle = document.getElementById('cpe-dynamic-styles');
-      if (!dynamicStyle || !dynamicStyle.isConnected) {
-        applyThemeAndFont();
-      }
-      const portal = document.getElementById('cpe-portal-root');
-      if (!portal || !portal.isConnected) {
-        getPortalRoot();
-        renderHUD();
-      }
-    } catch (e) {}
-  }, 6000);
 
   console.log('[ChatGPT Enhanced] UI Enhancement Suite Successfully Mounted!');
 })();
 '''
 
-final_script = template.replace("__VAZIR_B64__", vazir_b64).replace("__ESTEDAD_B64__", estedad_b64).replace("__OUTFIT_B64__", outfit_b64)
+final_script = template.replace("__VAZIR_B64__", vazir_b64)
 
 target_path = Path("chatgpt_theme_injector.js")
 target_path.write_text(final_script, encoding="utf-8")
