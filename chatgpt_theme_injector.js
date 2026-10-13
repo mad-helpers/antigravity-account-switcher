@@ -118,6 +118,7 @@
     fontSize: 15
   };
 
+  let cachedSettings = null;
   function loadSettings() {
     try {
       const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
@@ -126,10 +127,19 @@
       if (!s.fontEn || s.fontEn === 'default') {
         s.fontEn = 'Outfit';
       }
+      cachedSettings = s;
       return s;
     } catch (e) {
+      cachedSettings = DEFAULT_SETTINGS;
       return DEFAULT_SETTINGS;
     }
+  }
+
+  function getSettings() {
+    if (!cachedSettings) {
+      return loadSettings();
+    }
+    return cachedSettings;
   }
 
   window.__cpe_pending_reqs = window.__cpe_pending_reqs || {};
@@ -193,8 +203,9 @@
   };
 
   function saveSettings(patch) {
-    const current = loadSettings();
+    const current = getSettings();
     const updated = { ...current, ...patch };
+    cachedSettings = updated;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
     } catch (e) {}
@@ -290,7 +301,7 @@
 
   function applyThemeAndFont() {
     injectBase64Fonts();
-    const s = loadSettings();
+    const s = getSettings();
     const t = THEMES[s.theme] || THEMES.cyber;
     
     // Combine English (Latin) and Persian (Fa) fonts
@@ -787,14 +798,20 @@
   }
   window.__chatgpt_enhanced_apply_theme = applyThemeAndFont;
 
-  // 5. Intelligent BiDi & RTL Observer (Strictly Leaf-Targeted)
+  // 5. Ultra-Fast BiDi & RTL Engine (Zero-Reflow, WeakSet Cached, RAF Scheduled)
   const PERSIAN_REGEX = /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
-  const LEAF_TEXT_TAGS = new Set(['P', 'LI', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'BLOCKQUOTE']);
+  const LEAF_TEXT_TAGS = { P: 1, LI: 1, H1: 1, H2: 1, H3: 1, H4: 1, H5: 1, H6: 1, BLOCKQUOTE: 1 };
+  const processedBiDiElements = new WeakSet();
+  const pendingBiDiElements = new Set();
+  let bidiScheduled = false;
 
   function patchDiffsContainers() {
     try {
-      document.querySelectorAll('diffs-container').forEach(dc => {
-        if (!dc || !dc.shadowRoot) return;
+      const containers = document.querySelectorAll('diffs-container');
+      for (let i = 0; i < containers.length; i++) {
+        const dc = containers[i];
+        if (!dc || !dc.shadowRoot || dc.__cpe_patched) continue;
+        dc.__cpe_patched = true;
         let style = dc.shadowRoot.getElementById('cpe-diffs-styles');
         if (!style) {
           style = document.createElement('style');
@@ -814,106 +831,125 @@
             unicode-bidi: plaintext !important;
           }
         `;
-        dc.shadowRoot.querySelectorAll('[data-line], [data-content]').forEach(el => {
-          if (el.children.length === 0) {
-            const text = el.textContent || '';
-            if (PERSIAN_REGEX.test(text.substring(0, 100))) {
+        const lines = dc.shadowRoot.querySelectorAll('[data-line], [data-content]');
+        for (let j = 0; j < lines.length; j++) {
+          const el = lines[j];
+          if (el.children.length === 0 && !processedBiDiElements.has(el)) {
+            processedBiDiElements.add(el);
+            const text = (el.textContent || '').slice(0, 80);
+            if (PERSIAN_REGEX.test(text)) {
               el.classList.add('cpe-rtl-text');
             }
           }
-        });
-      });
+        }
+      }
     } catch(e) {}
   }
 
-  function shouldCheckElement(el) {
-    if (!el || el.nodeType !== 1) return false;
+  function queueElementForBiDi(el) {
+    if (!el || el.nodeType !== 1 || processedBiDiElements.has(el)) return;
     const tag = el.tagName;
-    if (tag === 'PRE' || tag === 'CODE' || tag === 'SVG' || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON') return false;
-    if (el.id === 'cpe-portal-root' || el.id === 'cpe-hud-pill' || (el.closest && el.closest('#cpe-portal-root, #cpe-hud-pill, pre, code, .katex, math'))) {
-      return false;
+    if (tag === 'PRE' || tag === 'CODE' || tag === 'SVG' || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'BUTTON' || tag === 'SCRIPT' || tag === 'STYLE') return;
+    if (el.id === 'cpe-portal-root' || el.id === 'cpe-hud-pill') return;
+
+    if (tag === 'DIFFS-CONTAINER') {
+      patchDiffsContainers();
+      return;
     }
-    if (LEAF_TEXT_TAGS.has(tag)) return true;
-    if (el.classList.contains('cm-line')) return true;
-    if (el.hasAttribute('data-line') || el.hasAttribute('data-content')) return true;
+
+    if (LEAF_TEXT_TAGS[tag] || el.classList.contains('cm-line') || el.hasAttribute('data-line') || el.hasAttribute('data-content')) {
+      pendingBiDiElements.add(el);
+      return;
+    }
+
     if (tag === 'SPAN' && (el.classList.contains('_clipViewport_a3okg_20') || el.closest('.sidebar-item, .sidebar-navigation'))) {
-      return el.children.length === 0;
-    }
-    return false;
-  }
-
-  function processBiDi(node) {
-    if (!node || node.nodeType !== Node.ELEMENT_NODE) return;
-    const s = loadSettings();
-    if (!s.rtlAuto) return;
-
-    patchDiffsContainers();
-
-    const candidates = [];
-    if (shouldCheckElement(node)) {
-      candidates.push(node);
-    }
-    if (node.querySelectorAll) {
-      const found = node.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, .cm-line, [data-line], [data-content], .sidebar-item span');
-      for (let i = 0; i < found.length; i++) {
-        if (shouldCheckElement(found[i])) {
-          candidates.push(found[i]);
-        }
+      if (el.children.length === 0) {
+        pendingBiDiElements.add(el);
+        return;
       }
     }
 
-    for (let i = 0; i < candidates.length; i++) {
-      const el = candidates[i];
-      const text = el.innerText || el.textContent || '';
-      if (PERSIAN_REGEX.test(text.substring(0, 100))) {
-        if (!el.classList.contains('cpe-rtl-text')) {
-          el.classList.add('cpe-rtl-text');
-          el.classList.remove('cpe-ltr-text');
-        }
-      } else {
-        if (el.classList.contains('cpe-rtl-text')) {
-          el.classList.remove('cpe-rtl-text');
+    if (el.children.length > 0) {
+      const leaves = el.querySelectorAll('p, li, h1, h2, h3, h4, h5, h6, blockquote, .cm-line, [data-line], [data-content], diffs-container, .sidebar-item span');
+      for (let i = 0; i < leaves.length; i++) {
+        const leaf = leaves[i];
+        if (leaf.tagName === 'DIFFS-CONTAINER') {
+          patchDiffsContainers();
+        } else if (!processedBiDiElements.has(leaf)) {
+          pendingBiDiElements.add(leaf);
         }
       }
     }
   }
 
-  let bidiTimer = null;
-  const pendingBiDiNodes = new Set();
-  function queueBiDi(node) {
-    if (!node || node.nodeType !== 1) return;
-    pendingBiDiNodes.add(node);
-    if (!bidiTimer) {
-      bidiTimer = setTimeout(() => {
-        bidiTimer = null;
-        const batch = Array.from(pendingBiDiNodes);
-        pendingBiDiNodes.clear();
-        for (const n of batch) {
-          processBiDi(n);
-        }
-      }, 100);
+  function flushBiDi() {
+    bidiScheduled = false;
+    const s = getSettings();
+    if (!s.rtlAuto) {
+      pendingBiDiElements.clear();
+      return;
     }
+
+    const items = Array.from(pendingBiDiElements);
+    pendingBiDiElements.clear();
+    if (items.length === 0) return;
+
+    for (let i = 0; i < items.length; i++) {
+      const el = items[i];
+      if (!el || !el.isConnected || processedBiDiElements.has(el)) continue;
+      processedBiDiElements.add(el);
+
+      // Fast textContent slice avoids triggering layout reflow
+      const text = (el.textContent || '').slice(0, 80);
+      if (PERSIAN_REGEX.test(text)) {
+        el.classList.add('cpe-rtl-text');
+      }
+    }
+  }
+
+  function scheduleBiDi() {
+    if (bidiScheduled) return;
+    bidiScheduled = true;
+    if (typeof requestAnimationFrame === 'function' && document.visibilityState === 'visible') {
+      requestAnimationFrame(flushBiDi);
+    } else {
+      setTimeout(flushBiDi, 16);
+    }
+  }
+
+  // Cleanup old observer if any on hot-reload
+  if (window.__cpe_observer) {
+    try { window.__cpe_observer.disconnect(); } catch(e) {}
   }
 
   const observer = new MutationObserver(mutations => {
-    for (const m of mutations) {
-      for (const node of m.addedNodes) {
-        if (node.nodeType === 1 && node.tagName !== 'SCRIPT' && node.tagName !== 'STYLE') {
-          if (node.id === 'cpe-portal-root' || node.id === 'cpe-hud-pill' || (node.closest && node.closest('#cpe-portal-root'))) {
-            continue;
-          }
-          queueBiDi(node);
+    for (let i = 0; i < mutations.length; i++) {
+      const m = mutations[i];
+      for (let j = 0; j < m.addedNodes.length; j++) {
+        const node = m.addedNodes[j];
+        if (node.nodeType === 1) {
+          queueElementForBiDi(node);
         }
       }
     }
+    if (pendingBiDiElements.size > 0) {
+      scheduleBiDi();
+    }
   });
+  window.__cpe_observer = observer;
 
   if (document.body) {
     observer.observe(document.body, { childList: true, subtree: true });
+    queueElementForBiDi(document.body);
+    scheduleBiDi();
   } else {
     document.addEventListener('DOMContentLoaded', () => {
-      if (document.body) observer.observe(document.body, { childList: true, subtree: true });
-    });
+      if (document.body) {
+        observer.observe(document.body, { childList: true, subtree: true });
+        queueElementForBiDi(document.body);
+        scheduleBiDi();
+      }
+    }, { once: true });
   }
 
   // 6. Draggable Floating Action HUD UI
@@ -1774,26 +1810,26 @@
     boot();
   }
 
-  if (!window.__cpe_watchdog_active) {
-    window.__cpe_watchdog_active = true;
-    setInterval(() => {
-      try {
-        const hud = document.getElementById('cpe-hud-pill');
-        if (!hud || !hud.isConnected) {
-          renderHUD();
-        }
-        const dynamicStyle = document.getElementById('cpe-dynamic-styles');
-        if (!dynamicStyle || !dynamicStyle.isConnected) {
-          applyThemeAndFont();
-        }
-        const portal = document.getElementById('cpe-portal-root');
-        if (!portal || !portal.isConnected) {
-          getPortalRoot();
-          renderHUD();
-        }
-      } catch (e) {}
-    }, 2500);
+  if (window.__cpe_watchdog_timer) {
+    clearInterval(window.__cpe_watchdog_timer);
   }
+  window.__cpe_watchdog_timer = setInterval(() => {
+    try {
+      const hud = document.getElementById('cpe-hud-pill');
+      if (!hud || !hud.isConnected) {
+        renderHUD();
+      }
+      const dynamicStyle = document.getElementById('cpe-dynamic-styles');
+      if (!dynamicStyle || !dynamicStyle.isConnected) {
+        applyThemeAndFont();
+      }
+      const portal = document.getElementById('cpe-portal-root');
+      if (!portal || !portal.isConnected) {
+        getPortalRoot();
+        renderHUD();
+      }
+    } catch (e) {}
+  }, 6000);
 
   console.log('[ChatGPT Enhanced] UI Enhancement Suite Successfully Mounted!');
 })();
