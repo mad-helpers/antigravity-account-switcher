@@ -101,6 +101,13 @@ def format_countdown(iso_str):
 
 def fetch_antigravity_usage(token_str):
     """Fetch live Antigravity quota and model limits for an account token."""
+    try:
+        import quota_engine
+        q = quota_engine.fetch_quota_and_tier(token_str)
+        if q:
+            return q
+    except Exception:
+        pass
     if not token_str or not token_str.startswith('go-keyring-base64:'):
         return None
     try:

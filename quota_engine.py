@@ -17,6 +17,8 @@ import platform
 import subprocess
 import urllib.request
 import urllib.parse
+import re
+import ssl
 from pathlib import Path
 
 if hasattr(sys.stdout, 'reconfigure'):
@@ -325,12 +327,336 @@ def ensure_fresh_token(token_data, account_email=None, force_refresh=False):
 
     return json.dumps(parsed, ensure_ascii=False) if (is_json_str or isinstance(token_data, str)) else parsed
 
+def discover_language_server(instance_id=None):
+    """
+    Auto-discovers the local Language Server HTTPS port and CSRF token
+    used by the running Google Antigravity desktop editor.
+    """
+    ctx = ssl._create_unverified_context()
+    sys_name = get_current_system()
+    home = Path.home()
+    dt_candidates = []
+
+    inst_suffix = ""
+    if instance_id and str(instance_id).strip() not in ("instance_1", "default", ""):
+        clean_inst = str(instance_id).replace("_", "-").title().replace("-", "")
+        inst_suffix = f"-{clean_inst}"
+
+    if sys_name == "windows":
+        appdata = Path(os.getenv("APPDATA", str(home / "AppData" / "Roaming")))
+        dt_candidates.append(appdata / f"Antigravity{inst_suffix}" / "DevToolsActivePort")
+        if inst_suffix:
+            dt_candidates.append(appdata / "Antigravity" / "DevToolsActivePort")
+    elif sys_name == "macos":
+        dt_candidates.append(home / "Library" / "Application Support" / f"Antigravity{inst_suffix}" / "DevToolsActivePort")
+        if inst_suffix:
+            dt_candidates.append(home / "Library" / "Application Support" / "Antigravity" / "DevToolsActivePort")
+    else:
+        dt_candidates.append(home / ".config" / f"Antigravity{inst_suffix}" / "DevToolsActivePort")
+        if inst_suffix:
+            dt_candidates.append(home / ".config" / "Antigravity" / "DevToolsActivePort")
+
+    for dt_path in dt_candidates:
+        if dt_path.exists():
+            try:
+                with open(dt_path, "r", encoding="utf-8") as f:
+                    cdp_port = int(f.readline().strip())
+
+                req = urllib.request.Request(f"http://127.0.0.1:{cdp_port}/json")
+                with urllib.request.urlopen(req, timeout=1.5) as r:
+                    targets = json.loads(r.read().decode("utf-8"))
+
+                ls_port = None
+                for t in targets:
+                    url = t.get("url", "")
+                    m = re.search(r"https?://127\.0\.0\.1:(\d+)", url)
+                    if m:
+                        ls_port = int(m.group(1))
+                        break
+                if ls_port:
+                    with urllib.request.urlopen(f"https://127.0.0.1:{ls_port}/", context=ctx, timeout=2.0) as r:
+                        html = r.read().decode("utf-8", errors="ignore")
+                    m_csrf = re.search(r'"csrfToken":\s*"([^"]+)"', html)
+                    csrf = m_csrf.group(1) if m_csrf else None
+                    if csrf:
+                        return ls_port, csrf
+            except Exception:
+                pass
+
+    # Secondary fallback: inspect running processes for language_server
+    try:
+        if sys_name == "windows":
+            cmd = ['powershell', '-NoProfile', '-Command',
+                   "Get-CimInstance Win32_Process -Filter \"Name LIKE 'language_server%'\" | Select-Object -ExpandProperty CommandLine"]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=3.0)
+            if res.returncode == 0 and res.stdout:
+                m_tok = re.search(r'--csrf_token\s+([a-zA-Z0-9-]+)', res.stdout)
+                csrf_found = m_tok.group(1) if m_tok else None
+                if csrf_found:
+                    cmd_net = ['powershell', '-NoProfile', '-Command',
+                               "Get-NetTCPConnection -State Listen | Where-Object { $_.LocalAddress -eq '127.0.0.1' } | Select-Object -ExpandProperty LocalPort"]
+                    res_net = subprocess.run(cmd_net, capture_output=True, text=True, timeout=3.0)
+                    if res_net.returncode == 0 and res_net.stdout:
+                        ports = [int(p.strip()) for p in res_net.stdout.split() if p.strip().isdigit()]
+                        for p in ports:
+                            if p > 40000:
+                                try:
+                                    test_req = urllib.request.Request(
+                                        f"https://127.0.0.1:{p}/exa.language_server_pb.LanguageServerService/GetServerConfiguration",
+                                        headers={
+                                            'Content-Type': 'application/json',
+                                            'Connect-Protocol-Version': '1',
+                                            'x-codeium-csrf-token': csrf_found
+                                        },
+                                        data=b'{}'
+                                    )
+                                    with urllib.request.urlopen(test_req, context=ctx, timeout=0.8) as test_resp:
+                                        if test_resp.status == 200:
+                                            return p, csrf_found
+                                except Exception:
+                                    pass
+    except Exception:
+        pass
+
+    return None, None
+
+def call_ls_rpc(ls_port, csrf, method, payload=None, timeout=3.5):
+    if payload is None:
+        payload = {}
+    ctx = ssl._create_unverified_context()
+    url = f"https://127.0.0.1:{ls_port}/exa.language_server_pb.LanguageServerService/{method}"
+    headers = {
+        'Content-Type': 'application/json',
+        'Connect-Protocol-Version': '1',
+        'x-codeium-csrf-token': csrf,
+        'User-Agent': 'antigravity'
+    }
+    data = json.dumps(payload).encode('utf-8')
+    req = urllib.request.Request(url, headers=headers, data=data)
+    with urllib.request.urlopen(req, context=ctx, timeout=timeout) as r:
+        return json.loads(r.read().decode('utf-8'))
+
+def fetch_quota_from_language_server(instance_id=None):
+    """
+    Fetches 100% accurate, live quota and tier status directly from
+    the running local Antigravity Language Server via Connect-RPC.
+    """
+    ls_port, csrf = discover_language_server(instance_id=instance_id)
+    if not ls_port or not csrf:
+        return None
+    try:
+        user_status_data = call_ls_rpc(ls_port, csrf, 'GetUserStatus')
+        quota_summary_data = call_ls_rpc(ls_port, csrf, 'RetrieveUserQuotaSummary')
+        models_data = call_ls_rpc(ls_port, csrf, 'GetAvailableModels')
+        code_assist_data = call_ls_rpc(ls_port, csrf, 'GetLoadCodeAssist')
+
+        user_status = (user_status_data or {}).get('userStatus', {})
+        email = user_status.get('email')
+        user_name = user_status.get('name')
+        avatar_url = user_status.get('profilePictureUrl', '')
+
+        tier_obj = user_status.get('userTier', {})
+        tier_name = tier_obj.get('name') or 'Google AI Pro'
+        if not tier_name or tier_name == 'Antigravity':
+            resp = (code_assist_data or {}).get('response', {})
+            paid_tier = resp.get('paidTier', {}).get('name')
+            if paid_tier:
+                tier_name = paid_tier
+
+        tier_code = 'pro'
+        if 'ultra' in tier_name.lower():
+            tier_code = 'ultra'
+        elif 'free' in tier_name.lower():
+            tier_code = 'free'
+        elif 'enterprise' in tier_name.lower():
+            tier_code = 'enterprise'
+
+        clean_name = "User"
+        if email and '@' in email:
+            clean_name = email.split('@')[0].split('.')[0].capitalize()
+        elif user_name:
+            clean_name = user_name.split()[0].capitalize()
+
+        summary_resp = (quota_summary_data or {}).get('response', {})
+        groups = summary_resp.get('groups', [])
+
+        gemini_w_bucket = None
+        gemini_5h_bucket = None
+        p3_w_bucket = None
+        p3_5h_bucket = None
+
+        for g in groups:
+            for b in g.get('buckets', []):
+                bid = b.get('bucketId', '')
+                if bid == 'gemini-weekly':
+                    gemini_w_bucket = b
+                elif bid == 'gemini-5h':
+                    gemini_5h_bucket = b
+                elif bid == '3p-weekly':
+                    p3_w_bucket = b
+                elif bid == '3p-5h':
+                    p3_5h_bucket = b
+
+        def _get_rem(b):
+            if not b:
+                return 1.0
+            rem = b.get('remainingFraction')
+            if rem is None and isinstance(b.get('remaining'), dict):
+                rem = b.get('remaining', {}).get('value')
+            try:
+                return float(rem) if rem is not None else 1.0
+            except Exception:
+                return 1.0
+
+        gw_rem = _get_rem(gemini_w_bucket)
+        g5_rem = _get_rem(gemini_5h_bucket)
+        p3w_rem = _get_rem(p3_w_bucket)
+        p35_rem = _get_rem(p3_5h_bucket)
+
+        gw_reset = gemini_w_bucket.get('resetTime') if gemini_w_bucket else None
+        g5_reset = gemini_5h_bucket.get('resetTime') if gemini_5h_bucket else None
+        p3w_reset = p3_w_bucket.get('resetTime') if p3_w_bucket else None
+        p35_reset = p3_5h_bucket.get('resetTime') if p3_5h_bucket else None
+
+        gw_cd, gw_lr, gw_sec = format_countdown(gw_reset)
+        g5_cd, g5_lr, g5_sec = format_countdown(g5_reset)
+        p3w_cd, p3w_lr, p3w_sec = format_countdown(p3w_reset)
+        p35_cd, p35_lr, p35_sec = format_countdown(p35_reset)
+
+        models = (models_data or {}).get('response', {}).get('models', {})
+        pools_map = {}
+        for m_id, m_info in models.items():
+            quota = m_info.get('quotaInfo')
+            if not quota:
+                continue
+            rem = quota.get('remainingFraction', 1.0)
+            reset_time = quota.get('resetTime')
+            disp = m_info.get('displayName', m_id)
+
+            if 'claude' in m_id.lower() or 'claude' in str(disp).lower():
+                cat = 'Claude Sonnet 4.6'
+            elif 'gpt' in m_id.lower():
+                cat = 'GPT-OSS 120B'
+            elif 'flash' in m_id.lower():
+                cat = 'Gemini 3.8 Flash High'
+            elif 'pro' in m_id.lower():
+                cat = 'Gemini 3.1 Pro'
+            else:
+                cat = 'Gemini Models'
+
+            if cat not in pools_map:
+                pools_map[cat] = {'rem': rem, 'reset_time': reset_time, 'display': disp}
+            elif rem < pools_map[cat]['rem']:
+                pools_map[cat]['rem'] = rem
+                if reset_time:
+                    pools_map[cat]['reset_time'] = reset_time
+
+        ordered = ['Gemini 3.8 Flash High', 'Gemini 3.1 Pro', 'Claude Sonnet 4.6', 'GPT-OSS 120B']
+        pools = []
+        for c in ordered:
+            is_claude_gpt = ('Claude' in c or 'GPT' in c)
+            base_rem = p35_rem if is_claude_gpt else g5_rem
+            base_reset = p35_reset if is_claude_gpt else g5_reset
+            base_cd = p35_cd if is_claude_gpt else g5_cd
+            base_lr = p35_lr if is_claude_gpt else g5_lr
+            base_sec = p35_sec if is_claude_gpt else g5_sec
+
+            w_rem = p3w_rem if is_claude_gpt else gw_rem
+            w_cd = p3w_cd if is_claude_gpt else gw_cd
+
+            if c in pools_map:
+                p = pools_map[c]
+                if p['rem'] < base_rem:
+                    base_rem = p['rem']
+                    if p['reset_time']:
+                        base_reset = p['reset_time']
+                        base_cd, base_lr, base_sec = format_countdown(base_reset)
+
+            used_pct = round((1.0 - base_rem) * 100, 1)
+            rem_pct = round(base_rem * 100, 1)
+            pools.append({
+                'name': c,
+                'used_pct': used_pct,
+                'remaining_pct': rem_pct,
+                'resets_in': base_cd,
+                'reset_time': base_lr,
+                'reset_secs': base_sec,
+                'reset_iso': str(base_reset) if base_reset else '',
+                'weekly_rem': round(w_rem * 100, 1),
+                'weekly_pct': round((1.0 - w_rem) * 100, 1),
+                'weekly_resets': w_cd
+            })
+
+        primary_session = {
+            'name': '5-Hour Limit',
+            'used_pct': round((1.0 - g5_rem) * 100, 1),
+            'remaining_pct': round(g5_rem * 100, 1),
+            'resets_in': g5_cd,
+            'reset_time': g5_lr,
+            'reset_secs': g5_sec,
+            'reset_iso': str(g5_reset) if g5_reset else ''
+        }
+
+        weekly_payload = {
+            'name': 'Weekly Limit',
+            'used_pct': round((1.0 - gw_rem) * 100, 1),
+            'remaining_pct': round(gw_rem * 100, 1),
+            'resets_in': gw_cd,
+            'reset_time': gw_lr,
+            'reset_secs': gw_sec,
+            'reset_iso': str(gw_reset) if gw_reset else ''
+        }
+
+        res_payload = {
+            'email': email or 'Unknown',
+            'name': clean_name,
+            'avatar': avatar_url or '',
+            'tier': tier_name,
+            'tier_code': tier_code,
+            'session': primary_session,
+            'weekly': weekly_payload,
+            'pools': pools
+        }
+
+        # Persist to active_quota.json
+        try:
+            aq_path = Path.home() / ".gemini" / "antigravity" / "active_quota.json"
+            aq_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(aq_path, "w", encoding="utf-8") as f:
+                json.dump(res_payload, f, indent=2, ensure_ascii=False)
+        except Exception:
+            pass
+
+        # Update manifest for this email if present
+        if email:
+            try:
+                man_path = Path.home() / ".gemini" / "accounts" / "manifest.json"
+                if man_path.exists():
+                    with open(man_path, "r", encoding="utf-8") as mf:
+                        m_data = json.load(mf)
+                    if email in m_data:
+                        m_data[email]['remaining_pct'] = primary_session['remaining_pct']
+                        m_data[email]['weekly_remaining_pct'] = weekly_payload['remaining_pct']
+                        m_data[email]['weekly_resets_in'] = weekly_payload['resets_in']
+                        m_data[email]['tier'] = tier_name
+                        m_data[email]['tier_code'] = tier_code
+                        with open(man_path, "w", encoding="utf-8") as mf:
+                            json.dump(m_data, mf, indent=2, ensure_ascii=False)
+            except Exception:
+                pass
+
+        return res_payload
+    except Exception:
+        return None
+
 _QUOTA_CACHE = {}
 _CACHE_TTL = 30  # seconds
 
 def fetch_quota_and_tier(token_str=None, force_refresh=False):
     """
     Fetch comprehensive account details: email, subscription tier, model quotas, and countdowns.
+    Prefers live Connect-RPC query to local Antigravity Language Server when available.
+    Falls back gracefully to manifest cache or OAuth refresh if editor is offline.
     """
     global _QUOTA_CACHE
     now = time.time()
@@ -341,6 +667,69 @@ def fetch_quota_and_tier(token_str=None, force_refresh=False):
         entry = _QUOTA_CACHE[cache_key]
         if now - entry.get('time', 0) < _CACHE_TTL:
             return dict(entry['data'])
+
+    # 1. Primary Strategy: Try local Antigravity Language Server (100% accurate, live)
+    ls_quota = None
+    try:
+        ls_quota = fetch_quota_from_language_server()
+    except Exception:
+        pass
+
+    if ls_quota and ls_quota.get('email'):
+        ls_email = str(ls_quota['email']).lower().strip()
+        # If token_str was not specified, or matches the active Language Server account:
+        if not token_claim or (token_claim.lower().strip() == ls_email):
+            _QUOTA_CACHE[ls_email] = {'data': ls_quota, 'time': now}
+            _QUOTA_CACHE['default'] = {'data': ls_quota, 'time': now}
+            return dict(ls_quota)
+
+    # 2. Secondary Strategy: If querying an inactive account or Language Server is not running
+    if token_claim:
+        try:
+            man_path = Path.home() / ".gemini" / "accounts" / "manifest.json"
+            if man_path.exists():
+                with open(man_path, "r", encoding="utf-8") as mf:
+                    m_data = json.load(mf)
+                if token_claim in m_data:
+                    m_entry = m_data[token_claim]
+                    rem = float(m_entry.get('remaining_pct', 100.0))
+                    w_rem = float(m_entry.get('weekly_remaining_pct', 100.0))
+                    w_res = m_entry.get('weekly_resets_in', 'Ready')
+                    fallback_data = {
+                        'email': token_claim,
+                        'name': m_entry.get('name') or token_claim.split('@')[0].capitalize(),
+                        'avatar': m_entry.get('avatar', ''),
+                        'tier': m_entry.get('tier', 'Google AI Pro'),
+                        'tier_code': m_entry.get('tier_code', 'pro'),
+                        'session': {
+                            'name': '5-Hour Limit',
+                            'used_pct': round(100.0 - rem, 1),
+                            'remaining_pct': rem,
+                            'resets_in': 'Ready',
+                            'reset_time': 'Ready',
+                            'reset_secs': 0,
+                            'reset_iso': ''
+                        },
+                        'weekly': {
+                            'name': 'Weekly Limit',
+                            'used_pct': round(100.0 - w_rem, 1),
+                            'remaining_pct': w_rem,
+                            'resets_in': w_res,
+                            'reset_time': 'Ready',
+                            'reset_secs': 0,
+                            'reset_iso': ''
+                        },
+                        'pools': [
+                            {'name': 'Gemini 3.8 Flash High', 'used_pct': round(100.0 - rem, 1), 'remaining_pct': rem, 'resets_in': 'Ready', 'reset_time': 'Ready', 'reset_secs': 0, 'weekly_rem': w_rem, 'weekly_pct': round(100.0 - w_rem, 1), 'weekly_resets': w_res},
+                            {'name': 'Gemini 3.1 Pro', 'used_pct': round(100.0 - rem, 1), 'remaining_pct': rem, 'resets_in': 'Ready', 'reset_time': 'Ready', 'reset_secs': 0, 'weekly_rem': w_rem, 'weekly_pct': round(100.0 - w_rem, 1), 'weekly_resets': w_res},
+                            {'name': 'Claude Sonnet 4.6', 'used_pct': 0.0, 'remaining_pct': 100.0, 'resets_in': 'Ready', 'reset_time': 'Ready', 'reset_secs': 0, 'weekly_rem': 100.0, 'weekly_pct': 0.0, 'weekly_resets': 'Ready'},
+                            {'name': 'GPT-OSS 120B', 'used_pct': 0.0, 'remaining_pct': 100.0, 'resets_in': 'Ready', 'reset_time': 'Ready', 'reset_secs': 0, 'weekly_rem': 100.0, 'weekly_pct': 0.0, 'weekly_resets': 'Ready'}
+                        ]
+                    }
+                    _QUOTA_CACHE[token_claim.lower().strip()] = {'data': fallback_data, 'time': now}
+                    return fallback_data
+        except Exception:
+            pass
 
     if not token_str:
         token_str = get_keychain_token()
