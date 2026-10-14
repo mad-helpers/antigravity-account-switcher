@@ -424,8 +424,9 @@ def get_devtools_targets():
     appdata = Path(os.getenv("APPDATA", str(home / "AppData" / "Roaming")))
     targets = []
     seen_ports = set()
+    primary_found = False
 
-    # 1. Primary instance (Instance 1)
+    # 1. Primary instance (Instance 1) from DevToolsActivePort file
     if DEVTOOLS_PORT_PATH.exists():
         try:
             with open(DEVTOOLS_PORT_PATH, "r", encoding="utf-8") as f:
@@ -433,12 +434,62 @@ def get_devtools_targets():
                 if lines:
                     val = int(lines[0])
                     if is_port_open(val) and val not in seen_ports:
-                        seen_ports.add(val)
-                        targets.append({
-                            "instance_id": "instance_1",
-                            "port": val,
-                            "default_account": get_instance_active_account("instance_1")
-                        })
+                        try:
+                            req = urllib.request.Request(f"http://127.0.0.1:{val}/json/version", headers={'User-Agent': 'Mozilla/5.0'})
+                            with urllib.request.urlopen(req, timeout=0.3) as resp:
+                                ver = json.loads(resp.read().decode())
+                                if "Browser" in ver or "Protocol-Version" in ver:
+                                    seen_ports.add(val)
+                                    targets.append({
+                                        "instance_id": "instance_1",
+                                        "port": val,
+                                        "default_account": get_instance_active_account("instance_1")
+                                    })
+                                    primary_found = True
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+    # Dynamic fallback: probe running Antigravity processes if port file was stale or closed
+    if not primary_found:
+        try:
+            import psutil
+            for p in psutil.process_iter(['pid', 'name']):
+                pname = (p.info.get('name') or '').lower()
+                if 'antigravity' in pname:
+                    try:
+                        get_conns = getattr(p, 'net_connections', None) or getattr(p, 'connections', None)
+                        if get_conns:
+                            for conn in get_conns(kind='inet'):
+                                if conn.status == psutil.CONN_LISTEN and conn.laddr.ip in ('127.0.0.1', '0.0.0.0'):
+                                    cand_port = conn.laddr.port
+                                    if cand_port not in seen_ports:
+                                        try:
+                                            test_url = f"http://127.0.0.1:{cand_port}/json/version"
+                                            req = urllib.request.Request(test_url, headers={'User-Agent': 'Mozilla/5.0'})
+                                            with urllib.request.urlopen(req, timeout=0.3) as resp:
+                                                ver_data = json.loads(resp.read().decode())
+                                                if "Browser" in ver_data or "Protocol-Version" in ver_data:
+                                                    seen_ports.add(cand_port)
+                                                    targets.append({
+                                                        "instance_id": "instance_1",
+                                                        "port": cand_port,
+                                                        "default_account": get_instance_active_account("instance_1")
+                                                    })
+                                                    primary_found = True
+                                                    try:
+                                                        DEVTOOLS_PORT_PATH.parent.mkdir(parents=True, exist_ok=True)
+                                                        DEVTOOLS_PORT_PATH.write_text(f"{cand_port}\n/devtools/browser/auto-discovered", encoding="utf-8")
+                                                    except Exception:
+                                                        pass
+                                                    break
+                                        except Exception:
+                                            pass
+                            if primary_found:
+                                break
+                    except Exception:
+                        pass
         except Exception:
             pass
 
