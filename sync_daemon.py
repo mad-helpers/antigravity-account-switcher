@@ -1425,7 +1425,7 @@ async def cdp_handle_action(ws, action, data, instance_id="instance_1", default_
                     threading.Thread(target=do_restart, daemon=True).start()
             if not res.get("success"):
                 if res.get("needs_reauth"):
-                    start_shared_oauth_flow(target_account=target_key)
+                    start_shared_oauth_flow(target_account=acc_key)
                 await cdp_broadcast_state(ws, {"msg": res.get("error") or "خطا در جابجایی حساب", "isErr": True}, instance_id=instance_id, account_email=default_account)
         elif action == "import":
             tok = (data.get("token") or "").replace("\r", "").replace("\n", "").strip()
@@ -1772,6 +1772,11 @@ def refresh_all_accounts_tokens():
                         manifest[acc_name]['token_file'] = ''
                         updated_manifest = True
                     continue
+
+                has_aicode = quota_engine.check_token_has_aicode(t_str)
+                if not has_aicode and acc_name in manifest:
+                    manifest[acc_name]['needs_reauth'] = True
+                    updated_manifest = True
 
                 fresh_str = quota_engine.ensure_fresh_token(t_str, account_email=acc_name)
                 # Fetch updated quota

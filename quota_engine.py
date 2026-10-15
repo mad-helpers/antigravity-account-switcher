@@ -253,7 +253,21 @@ def ensure_fresh_token(token_data, account_email=None, force_refresh=False):
 
     needs_refresh = bool(force_refresh)
     if not needs_refresh:
-        if expiry_str:
+        # Check id_token expiration if available
+        id_tok = parsed.get('id_token')
+        if id_tok and isinstance(id_tok, str) and '.' in id_tok:
+            try:
+                parts = id_tok.split('.')
+                if len(parts) >= 2:
+                    p = parts[1] + '=' * (-len(parts[1]) % 4)
+                    claims = json.loads(base64.urlsafe_b64decode(p).decode('utf-8', errors='ignore'))
+                    jwt_exp = claims.get('exp')
+                    if jwt_exp and (jwt_exp - time.time()) < 300:
+                        needs_refresh = True
+            except Exception:
+                pass
+
+        if not needs_refresh and expiry_str:
             try:
                 import datetime
                 clean_exp = expiry_str.replace('Z', '+00:00')
@@ -277,7 +291,7 @@ def ensure_fresh_token(token_data, account_email=None, force_refresh=False):
                     needs_refresh = True
             except Exception:
                 needs_refresh = True
-        else:
+        elif not needs_refresh and not expiry_str:
             needs_refresh = True
 
     if needs_refresh:
@@ -297,9 +311,13 @@ def ensure_fresh_token(token_data, account_email=None, force_refresh=False):
                     exp_sec = tok_data.get('expires_in', 3600)
                     now_utc = datetime.datetime.now(datetime.timezone.utc)
                     new_exp = now_utc + datetime.timedelta(seconds=exp_sec)
-                    t_obj['expiry'] = new_exp.isoformat()
+                    t_obj['expiry'] = new_exp.strftime('%Y-%m-%dT%H:%M:%S.000Z')
                     if 'id_token' in tok_data:
                         parsed['id_token'] = tok_data['id_token']
+                    if 'scope' in tok_data:
+                        t_obj['scope'] = tok_data['scope']
+                    if 'auth_method' not in parsed:
+                        parsed['auth_method'] = 'consumer'
                     if 'token' in parsed:
                         parsed['token'] = t_obj
                     else:
@@ -326,6 +344,57 @@ def ensure_fresh_token(token_data, account_email=None, force_refresh=False):
             pass
 
     return json.dumps(parsed, ensure_ascii=False) if (is_json_str or isinstance(token_data, str)) else parsed
+
+def check_token_has_aicode(token_data):
+    """
+    Checks if a token has the necessary https://www.googleapis.com/auth/aicode scope
+    required by Antigravity code assistance.
+    """
+    if not token_data:
+        return False
+    parsed = None
+    if isinstance(token_data, dict):
+        parsed = token_data
+    elif isinstance(token_data, str):
+        tok_s = token_data.strip()
+        if tok_s.startswith('{'):
+            try:
+                parsed = json.loads(tok_s)
+            except Exception:
+                pass
+    if not parsed:
+        return False
+
+    t_obj = parsed.get('token', parsed)
+    stored_scope = t_obj.get('scope', '') or parsed.get('scope', '')
+    if stored_scope:
+        return ('auth/aicode' in stored_scope) or ('https://www.googleapis.com/auth/aicode' in stored_scope)
+
+    # Query tokeninfo with access_token to inspect granted scopes
+    acc_tok = t_obj.get('access_token')
+    if not acc_tok:
+        return False
+    try:
+        req = urllib.request.Request(f'https://oauth2.googleapis.com/tokeninfo?access_token={acc_tok}')
+        with urllib.request.urlopen(req, timeout=4.0) as resp:
+            info = json.loads(resp.read().decode('utf-8'))
+            scope_str = info.get('scope', '')
+            if scope_str:
+                t_obj['scope'] = scope_str
+                em = extract_token_email(parsed)
+                if em:
+                    safe_acc = "".join(c if c.isalnum() or c in ('@', '.', '_', '-') else '_' for c in em)
+                    tf = os.path.expanduser(f"~/.gemini/accounts/{safe_acc}.token")
+                    try:
+                        with open(tf, 'w', encoding='utf-8') as f:
+                            json.dump(parsed, f, indent=2, ensure_ascii=False)
+                    except Exception:
+                        pass
+                return ('auth/aicode' in scope_str) or ('https://www.googleapis.com/auth/aicode' in scope_str)
+    except Exception:
+        pass
+
+    return True
 
 def discover_language_server(instance_id=None):
     """

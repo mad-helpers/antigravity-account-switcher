@@ -186,7 +186,14 @@ def restart_antigravity():
     sys_name = quota_engine.get_current_system()
     if sys_name == 'windows':
         subprocess.run(['powershell', '-NoProfile', '-Command', 'Get-Process -Name Antigravity, language_server -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue'], capture_output=True, creationflags=0x08000000)
-        time.sleep(1.2)
+        # Wait up to 5s until Antigravity and language_server processes have cleanly exited
+        for _ in range(15):
+            res = subprocess.run(['powershell', '-NoProfile', '-Command', '(Get-Process -Name Antigravity, language_server -ErrorAction SilentlyContinue).Count'], capture_output=True, text=True, creationflags=0x08000000)
+            count_str = (res.stdout or '').strip()
+            if not count_str or count_str == '0':
+                break
+            time.sleep(0.3)
+        time.sleep(0.6)
         paths = [
             os.path.expandvars(r"%LOCALAPPDATA%\Programs\antigravity\Antigravity.exe"),
             os.path.expandvars(r"%ProgramFiles%\Antigravity\Antigravity.exe"),
@@ -207,6 +214,28 @@ def restart_antigravity():
 
 def write_token_to_credential_manager(token):
     sys_name = quota_engine.get_current_system()
+    if isinstance(token, dict):
+        token_payload = dict(token)
+    elif isinstance(token, str) and token.strip().startswith('{'):
+        try:
+            token_payload = json.loads(token.strip())
+        except Exception:
+            token_payload = None
+    else:
+        token_payload = None
+
+    if token_payload:
+        if 'auth_method' not in token_payload:
+            token_payload['auth_method'] = 'consumer'
+        t_obj = token_payload.get('token', token_payload)
+        if isinstance(t_obj, dict) and t_obj.get('expiry'):
+            exp = t_obj['expiry']
+            if '+00:00' in exp:
+                t_obj['expiry'] = exp.replace('+00:00', 'Z')
+        token_str = json.dumps(token_payload, ensure_ascii=False)
+    else:
+        token_str = str(token).strip()
+
     if sys_name == 'windows':
         import ctypes
         from ctypes import wintypes
@@ -232,22 +261,22 @@ def write_token_to_credential_manager(token):
         CredWrite.argtypes = [PCREDENTIAL, wintypes.DWORD]
         CredWrite.restype = wintypes.BOOL
 
-        raw_bytes = token.encode('utf-8')
+        raw_bytes = token_str.encode('utf-8')
         buf = (ctypes.c_byte * len(raw_bytes))(*raw_bytes)
 
-        for target in ['gemini:antigravity', 'gemini']:
+        for target in ['gemini:antigravity', 'gemini', 'antigravity']:
             cred = CREDENTIAL()
             cred.Flags = 0
-            cred.Type = 1
+            cred.Type = 1  # CRED_TYPE_GENERIC
             cred.TargetName = target
             cred.UserName = 'antigravity'
             cred.CredentialBlobSize = len(raw_bytes)
             cred.CredentialBlob = ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte))
-            cred.Persist = 2
+            cred.Persist = 2  # CRED_PERSIST_LOCAL_MACHINE
             CredWrite(ctypes.byref(cred), 0)
 
     elif sys_name == 'macos':
-        subprocess.run(['security', 'add-generic-password', '-U', '-s', 'gemini', '-a', 'antigravity', '-w', token])
+        subprocess.run(['security', 'add-generic-password', '-U', '-s', 'gemini', '-a', 'antigravity', '-w', token_str])
 
 _launch_dual_lock = threading.Lock()
 _last_dual_launch_time = 0
@@ -534,8 +563,21 @@ def launch_dual_instance(account_key, project_path=None):
                 'error': f"توکن ذخیره شده متعلق به '{token_email}' است و با حساب '{account_key}' تطابق ندارد. لطفاً روی دکمه ورود با گوگل کلیک کنید."
             }
 
+        has_aicode = quota_engine.check_token_has_aicode(target_token)
+        if not has_aicode:
+            entry['needs_reauth'] = True
+            manifest[account_key] = entry
+            save_manifest(manifest)
+            return {
+                'success': False,
+                'needs_reauth': True,
+                'missing_aicode': True,
+                'account': account_key,
+                'error': f"حساب '{account_key}' با مجوزهای قدیمی ثبت شده و دسترسی لازم برای مدل‌های هوش مصنوعی (aicode) را ندارد. لطفاً یک‌بار روی دکمه ورود با گوگل کلیک کنید تا دسترسی فعال شود."
+            }
+
         # Ensure target token is 100% fresh and has valid access_token
-        target_token = quota_engine.ensure_fresh_token(target_token, account_email=account_key)
+        target_token = quota_engine.ensure_fresh_token(target_token, account_email=account_key, force_refresh=True)
             
         sys_name = quota_engine.get_current_system()
         inst_id, target_inst_dir = get_instance_dir_for_account(account_key)
@@ -771,7 +813,20 @@ def switch_account(account_key, no_restart=False):
             'error': f"توکن ذخیره شده متعلق به '{token_email}' است و با حساب '{account_key}' تطابق ندارد. لطفاً روی دکمه ورود با گوگل کلیک کنید."
         }
 
-    token = quota_engine.ensure_fresh_token(token, account_email=account_key)
+    has_aicode = quota_engine.check_token_has_aicode(token)
+    if not has_aicode:
+        entry['needs_reauth'] = True
+        manifest[account_key] = entry
+        save_manifest(manifest)
+        return {
+            'success': False,
+            'needs_reauth': True,
+            'missing_aicode': True,
+            'account': account_key,
+            'error': f"حساب '{account_key}' با مجوزهای قدیمی ثبت شده و دسترسی لازم برای مدل‌های هوش مصنوعی (aicode) را ندارد. لطفاً یک‌بار روی دکمه ورود با گوگل کلیک کنید تا دسترسی فعال شود."
+        }
+
+    token = quota_engine.ensure_fresh_token(token, account_email=account_key, force_refresh=True)
     write_token_to_credential_manager(token)
 
     email = entry.get('email', account_key)
@@ -1013,6 +1068,16 @@ def open_browser_url(url):
     except Exception:
         return False
 
+ANTIGRAVITY_OAUTH_SCOPES = (
+    "openid email profile "
+    "https://www.googleapis.com/auth/cloud-platform "
+    "https://www.googleapis.com/auth/userinfo.email "
+    "https://www.googleapis.com/auth/userinfo.profile "
+    "https://www.googleapis.com/auth/aicode "
+    "https://www.googleapis.com/auth/cclog "
+    "https://www.googleapis.com/auth/experimentsandconfigs"
+)
+
 def run_google_oauth_flow(target_account=None, on_url=None, on_complete=None):
     import urllib.parse
     import urllib.request
@@ -1023,7 +1088,7 @@ def run_google_oauth_flow(target_account=None, on_url=None, on_complete=None):
 
     port = find_free_port()
     redirect_uri = f"http://localhost:{port}/oauth2callback"
-    scope = "openid email profile https://www.googleapis.com/auth/cloud-platform"
+    scope = ANTIGRAVITY_OAUTH_SCOPES
     params = {
         "client_id": quota_engine.OAUTH_CLIENT_ID,
         "redirect_uri": redirect_uri,
@@ -1083,7 +1148,8 @@ def run_google_oauth_flow(target_account=None, on_url=None, on_complete=None):
                                 "access_token": access_tok,
                                 "token_type": tok_data.get("token_type", "Bearer"),
                                 "refresh_token": refresh_tok,
-                                "expiry": exp_iso
+                                "expiry": exp_iso,
+                                "scope": tok_data.get("scope", ANTIGRAVITY_OAUTH_SCOPES)
                             },
                             "auth_method": "consumer",
                             "id_token": tok_data.get("id_token")
