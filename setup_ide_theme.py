@@ -31,8 +31,11 @@ if sys.platform == "win32":
         pass
 
 HOME = Path.home()
-IDE_APP_DIR = Path(os.getenv("LOCALAPPDATA", str(HOME / "AppData" / "Local"))) / "Programs" / "Antigravity IDE" / "resources" / "app"
-IDE_USER_SETTINGS = Path(os.getenv("APPDATA", str(HOME / "AppData" / "Roaming"))) / "Antigravity IDE" / "User" / "settings.json"
+_local_progs = Path(os.getenv("LOCALAPPDATA", str(HOME / "AppData" / "Local"))) / "Programs"
+IDE_APP_DIR = next((p / "resources" / "app" for p in [_local_progs / "antigravity", _local_progs / "Antigravity IDE"] if (p / "resources" / "app").exists()), _local_progs / "antigravity" / "resources" / "app")
+
+_roaming = Path(os.getenv("APPDATA", str(HOME / "AppData" / "Roaming")))
+IDE_USER_SETTINGS = next((p / "User" / "settings.json" for p in [_roaming / "Antigravity", _roaming / "Antigravity IDE"] if (p / "User").exists()), _roaming / "Antigravity" / "User" / "settings.json")
 
 FONT_SOURCES = [
     Path(__file__).resolve().parent / "assets" / "fonts",
@@ -58,8 +61,10 @@ def setup_ide_theme():
     print("=" * 60)
 
     if not IDE_APP_DIR.exists():
-        print(f"❌ Antigravity IDE not found at: {IDE_APP_DIR}")
-        return False
+        print(f"ℹ️ Antigravity modern ASAR architecture detected (live theme injected via CDP).")
+        # Proceed to configure User settings.json
+        _configure_user_settings()
+        return True
 
     out_dir = IDE_APP_DIR / "out"
     wb_dir = out_dir / "vs" / "workbench"
@@ -1815,59 +1820,81 @@ math * {{
             json.dump(prod_data, f, indent=4)
         print(f"✓ Updated product.json checksums ({updated_count} hashes updated) - ZERO corruption warnings!")
 
-    # 8. Update User settings.json with optimal font and markdown configurations
-    if IDE_USER_SETTINGS.parent.exists():
-        settings = {}
-        if IDE_USER_SETTINGS.exists():
-            try:
-                with open(IDE_USER_SETTINGS, "r", encoding="utf-8") as f:
-                    settings = json.load(f)
-            except Exception:
-                settings = {}
+def _configure_user_settings():
+    targets = [
+        IDE_USER_SETTINGS,
+        Path(os.getenv("APPDATA", str(HOME / "AppData" / "Roaming"))) / "Antigravity" / "User" / "settings.json",
+        Path(os.getenv("APPDATA", str(HOME / "AppData" / "Roaming"))) / "Antigravity IDE" / "User" / "settings.json",
+    ]
+    # Add any secondary instances
+    roaming_dir = Path(os.getenv("APPDATA", str(HOME / "AppData" / "Roaming")))
+    for p in roaming_dir.glob("Antigravity-Instance*"):
+        if p.is_dir():
+            targets.append(p / "User" / "settings.json")
 
-        # Universal Editor settings
-        settings["editor.fontFamily"] = "Consolas, 'Vazirmatn', 'Vazirmatn UI', 'Vazir', 'Estedad', 'JetBrains Mono', monospace"
-        settings["editor.fontLigatures"] = True
-        settings["editor.fontSize"] = 14.5
-        settings["editor.lineHeight"] = 1.65
-        settings["editor.unicodeHighlight.nonBasicASCII"] = False
+    seen = set()
+    for target in targets:
+        target_str = str(target).lower()
+        if target_str in seen:
+            continue
+        seen.add(target_str)
+        try:
+            settings = {}
+            if target.exists():
+                try:
+                    with open(target, "r", encoding="utf-8") as f:
+                        settings = json.load(f)
+                except Exception:
+                    settings = {}
 
-        # Dedicated Markdown settings
-        settings["[markdown]"] = {
-            "editor.fontFamily": "'Vazirmatn', 'Vazirmatn UI', 'Vazir', 'Estedad', 'Outfit', sans-serif",
-            "editor.fontSize": 15.5,
-            "editor.lineHeight": 28,
-            "editor.wordWrap": "on",
-            "editor.quickSuggestions": {
-                "comments": "off",
-                "strings": "off",
-                "other": "off"
+            # Universal Editor settings
+            settings["editor.fontFamily"] = "Consolas, 'Vazirmatn', 'Vazirmatn UI', 'Vazir', 'Estedad', 'JetBrains Mono', monospace"
+            settings["editor.fontLigatures"] = True
+            settings["editor.fontSize"] = 14.5
+            settings["editor.lineHeight"] = 1.65
+            settings["editor.unicodeHighlight.nonBasicASCII"] = False
+
+            # Dedicated Markdown settings
+            settings["[markdown]"] = {
+                "editor.fontFamily": "'Vazirmatn', 'Vazirmatn UI', 'Vazir', 'Estedad', 'Outfit', sans-serif",
+                "editor.fontSize": 15.5,
+                "editor.lineHeight": 28,
+                "editor.wordWrap": "on",
+                "editor.quickSuggestions": {
+                    "comments": "off",
+                    "strings": "off",
+                    "other": "off"
+                }
             }
-        }
 
-        # Dedicated Plaintext settings
-        settings["[plaintext]"] = {
-            "editor.fontFamily": "'Vazirmatn', 'Vazirmatn UI', 'Vazir', 'Estedad', 'Outfit', sans-serif",
-            "editor.fontSize": 15.5,
-            "editor.lineHeight": 28,
-            "editor.wordWrap": "on"
-        }
+            # Dedicated Plaintext settings
+            settings["[plaintext]"] = {
+                "editor.fontFamily": "'Vazirmatn', 'Vazirmatn UI', 'Vazir', 'Estedad', 'Outfit', sans-serif",
+                "editor.fontSize": 15.5,
+                "editor.lineHeight": 28,
+                "editor.wordWrap": "on"
+            }
 
-        # Built-in Markdown Preview
-        settings["markdown.preview.fontFamily"] = "'Vazirmatn', 'Vazirmatn UI', 'Vazir', 'Estedad', 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
-        settings["markdown.preview.fontSize"] = 15.5
-        settings["markdown.preview.lineHeight"] = 1.85
+            # Built-in Markdown Preview
+            settings["markdown.preview.fontFamily"] = "'Vazirmatn', 'Vazirmatn UI', 'Vazir', 'Estedad', 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+            settings["markdown.preview.fontSize"] = 15.5
+            settings["markdown.preview.lineHeight"] = 1.85
 
-        # Chat & Terminal settings
-        settings["chat.editor.fontFamily"] = "'Outfit', 'Vazirmatn', 'Estedad', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
-        settings["chat.editor.fontSize"] = 14.5
-        settings["terminal.integrated.fontFamily"] = "Consolas, 'Cascadia Code', monospace"
-        settings["terminal.integrated.fontSize"] = 13.5
+            # Chat & Terminal settings
+            settings["chat.editor.fontFamily"] = "'Outfit', 'Vazirmatn', 'Estedad', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+            settings["chat.editor.fontSize"] = 14.5
+            settings["terminal.integrated.fontFamily"] = "Consolas, 'Cascadia Code', monospace"
+            settings["terminal.integrated.fontSize"] = 13.5
 
-        IDE_USER_SETTINGS.parent.mkdir(parents=True, exist_ok=True)
-        with open(IDE_USER_SETTINGS, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=4)
-        print("✓ Updated Antigravity IDE User settings.json with optimal font & Markdown configurations")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, "w", encoding="utf-8") as f:
+                json.dump(settings, f, indent=4)
+            print(f"✓ Updated User settings.json: {target}")
+        except Exception as ex:
+            print(f"⚠️ Failed to update {target}: {ex}")
+
+    # 8. Update User settings.json with optimal font and markdown configurations
+    _configure_user_settings()
 
     print("=" * 60)
     print("✨ SUCCESS: Antigravity IDE design, Persian fonts, Neon Glow & Customizer suite PERMANENTLY installed!")

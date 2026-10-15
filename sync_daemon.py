@@ -1700,6 +1700,13 @@ async def cdp_supervisor_loop():
             targets = get_devtools_targets()
             for inst_id, task in list(running_tasks.items()):
                 if task.done():
+                    exc = None
+                    try:
+                        exc = task.exception() if not task.cancelled() else None
+                    except Exception:
+                        pass
+                    if exc:
+                        log(f"[CDP TASK ERROR] [{inst_id}] {exc}")
                     running_tasks.pop(inst_id, None)
 
             for tgt in targets:
@@ -1834,20 +1841,21 @@ def daemon_loop():
     except Exception as e:
         pass
 
-    # Refresh tokens for all saved accounts on startup
-    try:
-        refresh_all_accounts_tokens()
-    except Exception:
-        pass
+    # Refresh tokens for all saved accounts and configure themes asynchronously in background
+    def _bg_startup_tasks():
+        try:
+            refresh_all_accounts_tokens()
+            log("[STARTUP] Background account token refresh completed.")
+        except Exception as e:
+            log(f"[STARTUP WARN] refresh_all_accounts_tokens error: {e}")
+        try:
+            import setup_ide_theme
+            setup_ide_theme.setup_ide_theme()
+        except Exception as e:
+            log(f"[STARTUP WARN] setup_ide_theme error: {e}")
+    threading.Thread(target=_bg_startup_tasks, daemon=True).start()
 
-    # Ensure Antigravity IDE theme & fonts are permanently configured
-    try:
-        import setup_ide_theme
-        setup_ide_theme.setup_ide_theme()
-    except Exception as e:
-        log(f"[WARN] setup_ide_theme error: {e}")
-
-    # Initial sync & injection
+    # Initial sync & injection immediately without blocking
     try:
         sync_quota_once(force=True, inject=True)
         log("[SYNC] Initial quota sync & injection completed.")

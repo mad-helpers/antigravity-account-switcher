@@ -4795,10 +4795,11 @@
     if (window.__aqm_dom_interval) clearInterval(window.__aqm_dom_interval);
     window.__aqm_dom_interval = setInterval(() => {
       const trigger = document.querySelector('[data-testid="model-selector-trigger"]');
+      const dock = document.querySelector('.part.statusbar, .statusbar, footer, [role="status"]') || document.getElementById('antigravity-quota-dock');
       const badge = document.getElementById('antigravity-usage-badge');
       const pill = document.getElementById('antigravity-usage-pill');
       const accPill = document.getElementById('antigravity-account-pill');
-      if (trigger && (!badge || !pill || !accPill)) {
+      if ((trigger || dock || document.body) && (!badge || !pill || !accPill)) {
         renderBadge();
       }
 

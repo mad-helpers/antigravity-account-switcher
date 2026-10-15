@@ -182,6 +182,70 @@ def restart_language_server():
     elif sys_name == 'macos':
         subprocess.run(['pkill', '-9', '-f', 'language_server'], capture_output=True)
 
+def ensure_daemon_running():
+    """
+    Checks if sync_daemon HTTP server is responding on port 39281.
+    If not, starts sync_daemon.py as a detached background process with watchdog.
+    """
+    try:
+        import urllib.request
+        req = urllib.request.Request("http://127.0.0.1:39281/health")
+        with urllib.request.urlopen(req, timeout=0.8) as resp:
+            if resp.status == 200:
+                return True
+    except Exception:
+        pass
+
+    sys_name = quota_engine.get_current_system()
+    bin_dir = Path.home() / ".gemini" / "antigravity" / "bin"
+    daemon_script = bin_dir / "sync_daemon.py"
+    if not daemon_script.exists():
+        daemon_script = Path(__file__).resolve().parent / "sync_daemon.py"
+
+    if sys_name == 'windows':
+        pythonw_cand = [
+            Path(sys.executable).parent / "pythonw.exe",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python" / "Python313" / "pythonw.exe",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python" / "Python312" / "pythonw.exe",
+            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python" / "Python311" / "pythonw.exe",
+        ]
+        pythonw = next((p for p in pythonw_cand if p.exists()), None)
+        if not pythonw:
+            import shutil
+            w_path = shutil.which("pythonw")
+            pythonw = Path(w_path) if w_path else Path(sys.executable)
+
+        DETACHED_PROCESS = 0x00000008
+        CREATE_NEW_PROCESS_GROUP = 0x00000200
+        CREATE_NO_WINDOW = 0x08000000
+        flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+
+        try:
+            subprocess.Popen(
+                [str(pythonw), str(daemon_script)],
+                cwd=str(bin_dir if bin_dir.exists() else daemon_script.parent),
+                creationflags=flags,
+                close_fds=True
+            )
+            return True
+        except Exception as e:
+            print(f"[WATCHDOG] Failed to spawn sync_daemon: {e}", flush=True)
+            return False
+    elif sys_name in ('darwin', 'linux', 'macos'):
+        try:
+            subprocess.Popen(
+                [sys.executable, str(daemon_script)],
+                cwd=str(bin_dir if bin_dir.exists() else daemon_script.parent),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True
+            )
+            return True
+        except Exception as e:
+            print(f"[WATCHDOG] Failed to spawn sync_daemon: {e}", flush=True)
+            return False
+    return False
+
 def restart_antigravity():
     sys_name = quota_engine.get_current_system()
     if sys_name == 'windows':
@@ -206,11 +270,18 @@ def restart_antigravity():
             subprocess.Popen([exe], creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
         else:
             subprocess.run(['powershell', '-NoProfile', '-Command', 'Start-Process Antigravity'], capture_output=True, creationflags=0x08000000)
+
+        # Self-healing watchdog: ensure sync_daemon is revived and ready to inject UI
+        def _revive_daemon_watchdog():
+            time.sleep(1.2)
+            ensure_daemon_running()
+        threading.Thread(target=_revive_daemon_watchdog, daemon=True).start()
     elif sys_name == 'macos':
         subprocess.run(['pkill', '-9', '-f', '/Applications/Antigravity.app'], capture_output=True)
         subprocess.run(['pkill', '-9', '-f', 'language_server'], capture_output=True)
         time.sleep(1.0)
         subprocess.Popen(['open', '/Applications/Antigravity.app'])
+        threading.Thread(target=lambda: (time.sleep(1.5), ensure_daemon_running()), daemon=True).start()
 
 def write_token_to_credential_manager(token):
     sys_name = quota_engine.get_current_system()
@@ -895,6 +966,11 @@ def switch_account(account_key, no_restart=False):
         storage_path.parent.mkdir(parents=True, exist_ok=True)
         with open(storage_path, 'w', encoding='utf-8') as f:
             json.dump(storage_data, f, indent=2)
+    except Exception:
+        pass
+
+    try:
+        ensure_daemon_running()
     except Exception:
         pass
 
@@ -1596,6 +1672,7 @@ def start_server(port=PORT):
     while is_port_in_use(actual_port):
         actual_port += 1
 
+    threading.Thread(target=ensure_daemon_running, daemon=True).start()
     server = ThreadingHTTPServer(('127.0.0.1', actual_port), SwitcherHTTPHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
