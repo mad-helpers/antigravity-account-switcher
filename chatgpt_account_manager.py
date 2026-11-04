@@ -571,20 +571,12 @@ def launch_chatgpt(instance_num=1, new_window=False, workspace_path=None):
         bring_chatgpt_to_front()
         return True, f"ChatGPT is already running with DevTools port {port} active."
 
-    # 2. If running without the debugging port, close the uninstrumented instance so port can bind
+    # 2. Refuse to restart an open uninstrumented app; preserve ongoing work
     if instance_num == 1 and not is_port_open(port) and sys.platform == "win32":
         import psutil
         is_running = any('chatgpt' in (p.info.get('name') or '').lower() for p in psutil.process_iter(['name']))
         if is_running:
-            try:
-                subprocess.run(
-                    ["powershell", "-NoProfile", "-Command", "Get-Process ChatGPT -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue"],
-                    timeout=5,
-                    capture_output=True
-                )
-                time.sleep(1.2)
-            except Exception:
-                pass
+            return False, 'Codex is already running without the theme connection. Quit normally, then reopen ChatGPT Enhanced; no process was closed.'
 
     if sys.platform == "win32" and instance_num == 1 and not new_window:
         try:

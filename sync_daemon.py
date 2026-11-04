@@ -20,62 +20,20 @@ import websockets
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
-# Ensure stdout/stderr exist and are safe for pythonw.exe without crashing on OSError
+# Ensure stdout/stderr exist and use UTF-8
 LOG_FILE = Path.home() / ".gemini" / "antigravity" / "quota_monitor.log"
-LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+try:
+    if sys.stdout is None or not hasattr(sys.stdout, "write"):
+        sys.stdout = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
+    elif hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-class SafeLogStream:
-    def __init__(self, log_path):
-        self.log_path = log_path
-        self._f = None
-        try:
-            self._f = open(log_path, "a", encoding="utf-8", buffering=1)
-        except Exception:
-            pass
-
-    def write(self, s):
-        try:
-            if self._f:
-                self._f.write(s)
-                self._f.flush()
-        except Exception:
-            pass
-
-    def flush(self):
-        try:
-            if self._f:
-                self._f.flush()
-        except Exception:
-            pass
-
-def init_safe_streams():
-    needs_redirect = False
-    if "pythonw" in (sys.executable or "").lower():
-        needs_redirect = True
-    else:
-        try:
-            if sys.stdout is None or not hasattr(sys.stdout, "write"):
-                needs_redirect = True
-            else:
-                sys.stdout.write(" ")
-                sys.stdout.flush()
-        except Exception:
-            needs_redirect = True
-
-    if needs_redirect:
-        safe_stream = SafeLogStream(LOG_FILE)
-        sys.stdout = safe_stream
-        sys.stderr = safe_stream
-    else:
-        try:
-            if hasattr(sys.stdout, "reconfigure"):
-                sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-            if hasattr(sys.stderr, "reconfigure"):
-                sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
-
-init_safe_streams()
+    if sys.stderr is None or not hasattr(sys.stderr, "write"):
+        sys.stderr = open(LOG_FILE, "a", encoding="utf-8", buffering=1)
+    elif hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 def log(msg):
     ts = time.strftime('%Y-%m-%d %H:%M:%S')
@@ -84,12 +42,6 @@ def log(msg):
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(line)
             f.flush()
-    except Exception:
-        pass
-    try:
-        if sys.stdout and sys.stdout is not None:
-            sys.stdout.write(line)
-            sys.stdout.flush()
     except Exception:
         pass
 
@@ -424,9 +376,8 @@ def get_devtools_targets():
     appdata = Path(os.getenv("APPDATA", str(home / "AppData" / "Roaming")))
     targets = []
     seen_ports = set()
-    primary_found = False
 
-    # 1. Primary instance (Instance 1) from DevToolsActivePort file
+    # 1. Primary instance (Instance 1)
     if DEVTOOLS_PORT_PATH.exists():
         try:
             with open(DEVTOOLS_PORT_PATH, "r", encoding="utf-8") as f:
@@ -434,62 +385,12 @@ def get_devtools_targets():
                 if lines:
                     val = int(lines[0])
                     if is_port_open(val) and val not in seen_ports:
-                        try:
-                            req = urllib.request.Request(f"http://127.0.0.1:{val}/json/version", headers={'User-Agent': 'Mozilla/5.0'})
-                            with urllib.request.urlopen(req, timeout=0.3) as resp:
-                                ver = json.loads(resp.read().decode())
-                                if "Browser" in ver or "Protocol-Version" in ver:
-                                    seen_ports.add(val)
-                                    targets.append({
-                                        "instance_id": "instance_1",
-                                        "port": val,
-                                        "default_account": get_instance_active_account("instance_1")
-                                    })
-                                    primary_found = True
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-
-    # Dynamic fallback: probe running Antigravity processes if port file was stale or closed
-    if not primary_found:
-        try:
-            import psutil
-            for p in psutil.process_iter(['pid', 'name']):
-                pname = (p.info.get('name') or '').lower()
-                if 'antigravity' in pname:
-                    try:
-                        get_conns = getattr(p, 'net_connections', None) or getattr(p, 'connections', None)
-                        if get_conns:
-                            for conn in get_conns(kind='inet'):
-                                if conn.status == psutil.CONN_LISTEN and conn.laddr.ip in ('127.0.0.1', '0.0.0.0'):
-                                    cand_port = conn.laddr.port
-                                    if cand_port not in seen_ports:
-                                        try:
-                                            test_url = f"http://127.0.0.1:{cand_port}/json/version"
-                                            req = urllib.request.Request(test_url, headers={'User-Agent': 'Mozilla/5.0'})
-                                            with urllib.request.urlopen(req, timeout=0.3) as resp:
-                                                ver_data = json.loads(resp.read().decode())
-                                                if "Browser" in ver_data or "Protocol-Version" in ver_data:
-                                                    seen_ports.add(cand_port)
-                                                    targets.append({
-                                                        "instance_id": "instance_1",
-                                                        "port": cand_port,
-                                                        "default_account": get_instance_active_account("instance_1")
-                                                    })
-                                                    primary_found = True
-                                                    try:
-                                                        DEVTOOLS_PORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-                                                        DEVTOOLS_PORT_PATH.write_text(f"{cand_port}\n/devtools/browser/auto-discovered", encoding="utf-8")
-                                                    except Exception:
-                                                        pass
-                                                    break
-                                        except Exception:
-                                            pass
-                            if primary_found:
-                                break
-                    except Exception:
-                        pass
+                        seen_ports.add(val)
+                        targets.append({
+                            "instance_id": "instance_1",
+                            "port": val,
+                            "default_account": get_instance_active_account("instance_1")
+                        })
         except Exception:
             pass
 
@@ -657,7 +558,7 @@ def sync_quota_once(force=False, inject=False):
         if getattr(srv_mod, 'is_dual_launching', lambda: False)():
             return _cached_usage or {}
 
-        usage = quota_engine.fetch_quota()
+        usage = quota_engine.fetch_quota(force_refresh=force)
         if not usage or not usage.get("session"):
             return _cached_usage or {}
 
@@ -835,11 +736,11 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', '*')
-        self.send_header('Access-Control-Allow-Private-Network', 'true')
         self.send_header('Connection', 'close')
         self.end_headers()
 
     def do_GET(self):
+        import urllib.parse
         try:
             import server as srv_mod
             if self.path.startswith('/sync') or self.path.startswith('/quota') or self.path.startswith('/api/quota'):
@@ -1015,57 +916,6 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
                 self.send_header('Connection', 'close')
                 self.end_headers()
                 self.wfile.write(json.dumps(payload, ensure_ascii=False).encode('utf-8'))
-            elif self.path == '/api/chatgpt/status':
-                import chatgpt_account_manager as cpm
-                meta = cpm.list_profiles()
-                settings = cpm.load_settings()
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json; charset=utf-8')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.send_header('Connection', 'close')
-                self.end_headers()
-                self.wfile.write(json.dumps({'status': 'ok', 'profiles': meta, 'settings': settings}, ensure_ascii=False).encode('utf-8'))
-            elif self.path.startswith('/api/chatgpt/launch'):
-                import chatgpt_account_manager as cpm
-                import urllib.parse
-                parsed = urllib.parse.urlparse(self.path)
-                qs = urllib.parse.parse_qs(parsed.query)
-                inst = int(qs.get('instance', ['1'])[0])
-                new_win = qs.get('new_window', ['0'])[0] in ('1', 'true')
-                ok, msg = cpm.launch_chatgpt(instance_num=inst, new_window=new_win)
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json; charset=utf-8')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.send_header('Connection', 'close')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': ok, 'message': msg}, ensure_ascii=False).encode('utf-8'))
-            elif self.path.startswith('/api/chatgpt/login'):
-                import chatgpt_account_manager as cpm
-                import urllib.parse
-                parsed = urllib.parse.urlparse(self.path)
-                qs = urllib.parse.parse_qs(parsed.query)
-                mode = qs.get('mode', ['oauth'])[0]
-                api_key = qs.get('api_key', [None])[0]
-                ok, msg = cpm.trigger_codex_login(mode=mode, api_key=api_key)
-                if isinstance(msg, dict):
-                    resp = {'success': ok, 'auth_url': msg.get('auth_url'), 'message': msg.get('message', '')}
-                else:
-                    resp = {'success': ok, 'message': str(msg)}
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json; charset=utf-8')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.send_header('Connection', 'close')
-                self.end_headers()
-                self.wfile.write(json.dumps(resp, ensure_ascii=False).encode('utf-8'))
-            elif self.path == '/api/chatgpt/logout':
-                import chatgpt_account_manager as cpm
-                ok, msg = cpm.trigger_codex_logout()
-                self.send_response(200)
-                self.send_header('Content-Type', 'application/json; charset=utf-8')
-                self.send_header('Access-Control-Allow-Origin', '*')
-                self.send_header('Connection', 'close')
-                self.end_headers()
-                self.wfile.write(json.dumps({'success': ok, 'message': msg}, ensure_ascii=False).encode('utf-8'))
             else:
                 self.send_response(404)
                 self.send_header('Connection', 'close')
@@ -1094,26 +944,20 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
             global _cached_account_info
             if self.path == '/api/switch':
                 acc_key = data.get('accountKey')
-                no_restart = data.get('noRestart', False)
+                no_restart = data.get('noRestart', True)
                 resp = srv_mod.switch_account(acc_key, no_restart=True)
                 if resp.get('success'):
+                    resp['restart'] = {'requested': not bool(no_restart), 'launched': False, 'completed': False,
+                                       'status': 'pending' if not no_restart else 'not_requested'}
                     _cached_account_info = resp.get('quota')
                     _cached_account_time = time.time()
-                    if _active_cdp_ws and _active_cdp_loop:
-                        try:
-                            asyncio.run_coroutine_threadsafe(
-                                cdp_broadcast_state(_active_cdp_ws, {
-                                    "msg": f"حساب به {acc_key} تغییر یافت. در حال راه‌اندازی مجدد...",
-                                    "isErr": False
-                                }),
-                                _active_cdp_loop
-                            )
-                        except Exception:
-                            pass
+                    broadcast_all_instances({
+                        "msg": f"حساب به {acc_key} تغییر یافت.",
+                        "isErr": False, "restart": resp["restart"]
+                    }, target_account=acc_key)
                     if not no_restart:
                         def do_restart():
-                            time.sleep(0.8)
-                            srv_mod.restart_antigravity()
+                            _restart_switched_account(srv_mod)
                         threading.Thread(target=do_restart, daemon=True).start()
                 else:
                     _cached_account_info = None
@@ -1248,34 +1092,6 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
                     data.get('account'),
                     action=data.get('action', 'add')
                 )
-            elif self.path == '/api/chatgpt/switch':
-                import chatgpt_account_manager as cpm
-                prof = data.get('profile') or data.get('profile_id')
-                ok, msg = cpm.switch_profile(prof)
-                resp = {'success': ok, 'message': msg}
-            elif self.path == '/api/chatgpt/save_profile':
-                import chatgpt_account_manager as cpm
-                prof_id = data.get('id') or data.get('profile_id')
-                disp_name = data.get('name') or data.get('display_name')
-                ok, res = cpm.save_current_profile(prof_id, display_name=disp_name)
-                resp = {'success': ok, 'profile': res}
-            elif self.path == '/api/chatgpt/settings':
-                import chatgpt_account_manager as cpm
-                ok, s = cpm.save_settings(data)
-                resp = {'success': ok, 'settings': s}
-            elif self.path == '/api/chatgpt/login':
-                import chatgpt_account_manager as cpm
-                mode = data.get('mode', 'oauth')
-                api_key = data.get('api_key')
-                ok, msg = cpm.trigger_codex_login(mode=mode, api_key=api_key)
-                if isinstance(msg, dict):
-                    resp = {'success': ok, 'auth_url': msg.get('auth_url'), 'message': msg.get('message', '')}
-                else:
-                    resp = {'success': ok, 'message': str(msg)}
-            elif self.path == '/api/chatgpt/logout':
-                import chatgpt_account_manager as cpm
-                ok, msg = cpm.trigger_codex_logout()
-                resp = {'success': ok, 'message': msg}
             
             if isinstance(resp, dict) and resp.get('success'):
                 broadcast_all_instances()
@@ -1315,7 +1131,7 @@ async def cdp_broadcast_state(ws, extra_toast=None, instance_id="instance_1", ac
         import migration_engine as m_eng
         manifest = srv.load_manifest()
 
-        target_account = get_instance_active_account(instance_id) or account_email
+        target_account = account_email or get_instance_active_account(instance_id)
         if not target_account or target_account not in manifest:
             target_account = get_primary_account()
         with _cdp_conns_lock:
@@ -1378,18 +1194,37 @@ async def cdp_broadcast_state(ws, extra_toast=None, instance_id="instance_1", ac
     except Exception as e:
         print(f"[CDP STATE ERROR] [{instance_id}] {e}", flush=True)
 
-def broadcast_all_instances(extra_toast=None):
+def broadcast_all_instances(extra_toast=None, target_account=None):
     with _cdp_conns_lock:
         conns = list(_active_cdp_connections.values())
     for c in conns:
         try:
             if c.get("ws") and c.get("loop"):
+                acc = target_account or c.get("account")
                 asyncio.run_coroutine_threadsafe(
-                    cdp_broadcast_state(c["ws"], extra_toast=extra_toast, instance_id=c.get("instance_id", "instance_1"), account_email=c.get("account")),
+                    cdp_broadcast_state(c["ws"], extra_toast=extra_toast, instance_id=c.get("instance_id", "instance_1"), account_email=acc),
                     c["loop"]
                 )
         except Exception:
             pass
+
+def _restart_switched_account(srv):
+    """Finish an explicitly requested restart and publish its independent outcome."""
+    time.sleep(0.8)  # Let the successful account-switch response reach its caller.
+    try:
+        result = srv.restart_after_account_switch()
+    except Exception as error:
+        result = {'requested': True, 'launched': False, 'completed': False, 'status': 'refused',
+                  'error': 'Restart worker failed: ' + type(error).__name__}
+    log('[RESTART RESULT] ' + json.dumps(result, ensure_ascii=False))
+    launched = result.get('launched') is True and result.get('status') == 'launch_requested'
+    broadcast_all_instances({
+        'msg': 'حساب تغییر یافت؛ اجرای برنامه درخواست شد. آماده‌بودن برنامه هنوز تأیید نشده است.' if launched else
+               'حساب تغییر یافت؛ راه‌اندازی مجدد ایمن انجام نشد. وضعیت برنامه را بررسی کنید.',
+        'isErr': not launched, 'restart': result
+    })
+    return result
+
 
 async def cdp_handle_action(ws, action, data, instance_id="instance_1", default_account=None):
     try:
@@ -1406,22 +1241,26 @@ async def cdp_handle_action(ws, action, data, instance_id="instance_1", default_
             })
         elif action == "switch":
             acc_key = data.get("accountKey")
-            no_restart = data.get("noRestart", False)
+            no_restart = data.get("noRestart", True)
             log(f"[CDP SWITCH] Target: {acc_key}")
             res = srv.switch_account(acc_key, no_restart=True)
             if res.get("success"):
+                res["restart"] = {"requested": not bool(no_restart), "launched": False, "completed": False,
+                                  "status": "pending" if not no_restart else "not_requested"}
                 quota_d = res.get("quota")
                 global _cached_account_info, _cached_account_time
                 _cached_account_info = quota_d
                 _cached_account_time = time.time()
+                with _cdp_conns_lock:
+                    if instance_id in _active_cdp_connections:
+                        _active_cdp_connections[instance_id]["account"] = acc_key
                 broadcast_all_instances({
-                    "msg": f"حساب به {acc_key} تغییر یافت. در حال راه‌اندازی مجدد...",
-                    "isErr": False
-                })
+                    "msg": f"حساب به {acc_key} تغییر یافت.",
+                    "isErr": False, "restart": res["restart"]
+                }, target_account=acc_key)
                 if not no_restart:
                     def do_restart():
-                        time.sleep(0.8)
-                        srv.restart_antigravity()
+                        _restart_switched_account(srv)
                     threading.Thread(target=do_restart, daemon=True).start()
             if not res.get("success"):
                 if res.get("needs_reauth"):
@@ -1700,13 +1539,6 @@ async def cdp_supervisor_loop():
             targets = get_devtools_targets()
             for inst_id, task in list(running_tasks.items()):
                 if task.done():
-                    exc = None
-                    try:
-                        exc = task.exception() if not task.cancelled() else None
-                    except Exception:
-                        pass
-                    if exc:
-                        log(f"[CDP TASK ERROR] [{inst_id}] {exc}")
                     running_tasks.pop(inst_id, None)
 
             for tgt in targets:
@@ -1726,26 +1558,28 @@ def start_cdp_supervisor():
     asyncio.set_event_loop(loop)
     loop.run_until_complete(cdp_supervisor_loop())
 
-def kill_other_daemon_instances():
+def acquire_daemon_lock(path=None):
+    """Keep one service per user store; never terminate another process."""
+    path = Path(path) if path is not None else Path.home() / ".gemini" / "antigravity" / "quota_daemon.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a+b")
     try:
-        import psutil
-        my_pid = os.getpid()
-        for p in psutil.process_iter(['pid', 'name', 'cmdline']):
-            if p.info['pid'] == my_pid:
-                continue
-            cmd = p.info.get('cmdline') or []
-            cmd_str = " ".join(cmd).lower()
-            if 'sync_daemon.py' in cmd_str and ('python' in (p.info.get('name') or '').lower()):
-                try:
-                    p.terminate()
-                    p.wait(timeout=2)
-                except Exception:
-                    try:
-                        p.kill()
-                    except Exception:
-                        pass
-    except Exception:
-        pass
+        handle.seek(0, 2)
+        if handle.tell() == 0:
+            handle.write(b"0")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return handle
+    except OSError:
+        handle.close()
+        return None
+
 
 def refresh_all_accounts_tokens():
     try:
@@ -1780,11 +1614,6 @@ def refresh_all_accounts_tokens():
                         updated_manifest = True
                     continue
 
-                has_aicode = quota_engine.check_token_has_aicode(t_str)
-                if not has_aicode and acc_name in manifest:
-                    manifest[acc_name]['needs_reauth'] = True
-                    updated_manifest = True
-
                 fresh_str = quota_engine.ensure_fresh_token(t_str, account_email=acc_name)
                 # Fetch updated quota
                 q = quota_engine.fetch_quota_and_tier(fresh_str, force_refresh=True)
@@ -1813,9 +1642,37 @@ def refresh_all_accounts_tokens():
     except Exception:
         pass
 
+def start_optional_theme_service(config_path=None):
+    """Only attach the existing theme injector; never launch or close an app."""
+    config_path = Path(config_path) if config_path is not None else Path.home() / '.gemini' / 'antigravity' / 'theme_services.json'
+    try:
+        config = json.loads(config_path.read_text(encoding='utf-8'))
+        if not isinstance(config, dict) or config.get('codex_theme') is not True:
+            return
+    except (OSError, ValueError):
+        return
+    def supervise():
+        while True:
+            try:
+                helper_dir = str(Path.home() / '.gemini' / 'antigravity' / 'bin')
+                if helper_dir not in sys.path:
+                    sys.path.append(helper_dir)
+                import chatgpt_cdp_daemon
+                asyncio.run(chatgpt_cdp_daemon.daemon_loop(ports=[9223, 9224], poll_interval=1.0))
+            except Exception:
+                log('[THEME] Passive Codex theme connection failed; retrying.')
+                time.sleep(3)
+    threading.Thread(target=supervise, daemon=True).start()
+    log('[THEME] Passive Codex theme service enabled; automatic app relaunch is disabled.')
+
+
 def daemon_loop():
-    kill_other_daemon_instances()
-    log("[INFO] Antigravity Quota Monitor on-demand daemon active.")
+    owner_lock = acquire_daemon_lock()
+    if owner_lock is None:
+        log("[INFO] Existing service owns this store; leaving it running.")
+        return
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [INFO] Quota Monitor active; automatic application restarts disabled.", flush=True)
+    start_optional_theme_service()
     # Start on-demand local HTTP server
     t = threading.Thread(target=start_http_server, daemon=True)
     t.start()
@@ -1823,50 +1680,24 @@ def daemon_loop():
     # Start native CDP IPC supervisor thread
     t_cdp = threading.Thread(target=start_cdp_supervisor, daemon=True)
     t_cdp.start()
-    log("[CDP] Native CDP supervisor thread started.")
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [CDP] Native CDP supervisor thread started.", flush=True)
 
-    # Start ChatGPT & Codex CDP injector thread
+    # Refresh tokens for all saved accounts on startup
     try:
-        import chatgpt_cdp_daemon
-        def _run_chatgpt_cdp():
-            while True:
-                try:
-                    asyncio.run(chatgpt_cdp_daemon.daemon_loop(poll_interval=0.4))
-                except Exception as ex:
-                    log(f"[CDP] ChatGPT CDP daemon restarted after error: {ex}")
-                    time.sleep(1.0)
-        t_cpe = threading.Thread(target=_run_chatgpt_cdp, daemon=True)
-        t_cpe.start()
-        log("[CDP] ChatGPT & Codex CDP supervisor thread started.")
-    except Exception as e:
+        refresh_all_accounts_tokens()
+    except Exception:
         pass
 
-    # Refresh tokens for all saved accounts and configure themes asynchronously in background
-    def _bg_startup_tasks():
-        try:
-            refresh_all_accounts_tokens()
-            log("[STARTUP] Background account token refresh completed.")
-        except Exception as e:
-            log(f"[STARTUP WARN] refresh_all_accounts_tokens error: {e}")
-        try:
-            import setup_ide_theme
-            setup_ide_theme.setup_ide_theme()
-        except Exception as e:
-            log(f"[STARTUP WARN] setup_ide_theme error: {e}")
-    threading.Thread(target=_bg_startup_tasks, daemon=True).start()
-
-    # Initial sync & injection immediately without blocking
+    # Initial sync & injection
     try:
         sync_quota_once(force=True, inject=True)
-        log("[SYNC] Initial quota sync & injection completed.")
+        print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [SYNC] Initial quota sync & injection completed.", flush=True)
     except Exception as e:
-        log(f"[ERROR] Initial sync error: {e}")
+        print(f"[ERROR] Initial sync error: {e}", flush=True)
 
     last_heartbeat_time = time.time()
     last_injected_port = None
     last_verify_time = 0
-    last_chatgpt_check_time = 0
-    last_chatgpt_relaunch_time = 0
 
     while True:
         time.sleep(3)
@@ -1889,44 +1720,13 @@ def daemon_loop():
         except Exception:
             pass
 
-        # 2. Watchdog: Ensure ChatGPT running instances always have DevTools port instrumentation
-        if now - last_chatgpt_check_time >= 5:
-            last_chatgpt_check_time = now
-            try:
-                import psutil
-                import chatgpt_account_manager as cpm
-                chatgpt_pids_without_port = []
-                has_instrumented_chatgpt = False
-                for p in psutil.process_iter(['pid', 'name', 'cmdline']):
-                    if 'chatgpt' in (p.info.get('name') or '').lower():
-                        cmd = p.info.get('cmdline') or []
-                        if not any('--type=' in arg for arg in cmd):
-                            if any('--remote-debugging-port' in arg for arg in cmd):
-                                has_instrumented_chatgpt = True
-                            else:
-                                chatgpt_pids_without_port.append(p)
-                
-                if chatgpt_pids_without_port and not has_instrumented_chatgpt:
-                    if now - last_chatgpt_relaunch_time > 20:
-                        last_chatgpt_relaunch_time = now
-                        log("[WATCHDOG] Detected ChatGPT running without DevTools port. Auto-relaunching with instrumentation...")
-                        for p in chatgpt_pids_without_port:
-                            try:
-                                p.terminate()
-                            except Exception:
-                                pass
-                        time.sleep(1.0)
-                        cpm.launch_chatgpt(instance_num=1)
-            except Exception:
-                pass
-
-        # 3. Passive keepalive heartbeat and token refresh every 15 minutes (900 seconds)
+        # 2. Passive keepalive heartbeat and token refresh every 15 minutes (900 seconds)
         if now - last_heartbeat_time >= 900:
             last_heartbeat_time = now
             try:
                 refresh_all_accounts_tokens()
                 sync_quota_once(force=False)
-                log("[HEARTBEAT] Passive quota heartbeat and account tokens refreshed.")
+                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [HEARTBEAT] Passive quota heartbeat and account tokens refreshed.", flush=True)
             except Exception:
                 pass
 

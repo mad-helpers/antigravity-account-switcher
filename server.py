@@ -175,12 +175,7 @@ def save_user_settings(patch, instance_id=None, account_email=None):
     except Exception as e:
         return False, str(e)
 
-def restart_language_server():
-    sys_name = quota_engine.get_current_system()
-    if sys_name == 'windows':
-        subprocess.run(['powershell', '-NoProfile', '-Command', 'Get-Process -Name language_server -ErrorAction SilentlyContinue | Stop-Process -Force'], capture_output=True, creationflags=0x08000000)
-    elif sys_name == 'macos':
-        subprocess.run(['pkill', '-9', '-f', 'language_server'], capture_output=True)
+
 
 def ensure_daemon_running():
     """
@@ -203,33 +198,17 @@ def ensure_daemon_running():
         daemon_script = Path(__file__).resolve().parent / "sync_daemon.py"
 
     if sys_name == 'windows':
-        pythonw_cand = [
-            Path(sys.executable).parent / "pythonw.exe",
-            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python" / "Python313" / "pythonw.exe",
-            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python" / "Python312" / "pythonw.exe",
-            Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "Python" / "Python311" / "pythonw.exe",
-        ]
-        pythonw = next((p for p in pythonw_cand if p.exists()), None)
-        if not pythonw:
-            import shutil
-            w_path = shutil.which("pythonw")
-            pythonw = Path(w_path) if w_path else Path(sys.executable)
-
-        DETACHED_PROCESS = 0x00000008
-        CREATE_NEW_PROCESS_GROUP = 0x00000200
-        CREATE_NO_WINDOW = 0x08000000
-        flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
-
+        # Task Scheduler owns the daemon independently of an IDE's process/job tree.
         try:
-            subprocess.Popen(
-                [str(pythonw), str(daemon_script)],
-                cwd=str(bin_dir if bin_dir.exists() else daemon_script.parent),
-                creationflags=flags,
-                close_fds=True
-            )
-            return True
-        except Exception as e:
-            print(f"[WATCHDOG] Failed to spawn sync_daemon: {e}", flush=True)
+            result = subprocess.run(
+                ['schtasks.exe', '/Run', '/TN', 'AntigravityQuotaMonitor'],
+                capture_output=True, timeout=8, creationflags=0x08000000)
+            if result.returncode == 0:
+                return True
+            print('[SERVICE] Scheduled daemon start failed; no caller-owned fallback.', flush=True)
+            return False
+        except Exception:
+            print('[SERVICE] Could not request scheduled daemon start.', flush=True)
             return False
     elif sys_name in ('darwin', 'linux', 'macos'):
         try:
@@ -246,42 +225,187 @@ def ensure_daemon_running():
             return False
     return False
 
-def restart_antigravity():
+
+
+
+
+
+
+def _antigravity_executable_paths():
+    """Supported Windows installations, in launch-preference order."""
+    roots = [(os.environ.get('LOCALAPPDATA'), ('Programs', 'antigravity')),
+             (os.environ.get('ProgramFiles'), ('Antigravity',)),
+             (os.environ.get('ProgramFiles(x86)'), ('Antigravity',))]
+    return list(dict.fromkeys(os.path.join(root, *parts, 'Antigravity.exe')
+                              for root, parts in roots if root))
+
+
+def _windows_process_session_id(pid):
+    """Read the Windows logon session without sending any process control request."""
+    import ctypes
+    from ctypes import wintypes
+    session = wintypes.DWORD()
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    query = kernel32.ProcessIdToSessionId
+    query.argtypes = [wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    query.restype = wintypes.BOOL
+    if not query(int(pid), ctypes.byref(session)):
+        raise OSError(ctypes.get_last_error(), 'Cannot establish process session ownership')
+    return int(session.value)
+
+
+def _primary_antigravity_processes():
+    """Find the primary profile in every supported install, excluding other instances."""
+    import psutil
+    current_user = psutil.Process().username()
+    if not isinstance(current_user, str) or not current_user.strip():
+        raise RuntimeError('Cannot establish current user ownership')
+    current_user = current_user.casefold()
+    current_session = _windows_process_session_id(os.getpid())
+    if not isinstance(current_session, int) or current_session < 0:
+        raise RuntimeError('Cannot establish current Windows session')
+    expected = {os.path.normcase(os.path.abspath(path)) for path in _antigravity_executable_paths()}
+    expected_engines = {os.path.normcase(os.path.join(os.path.dirname(path),
+                         'resources', 'bin', 'language_server.exe')) for path in expected}
+    primary_data = os.path.normcase(os.path.abspath(os.path.join(
+        os.environ.get('APPDATA') or os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming'), 'Antigravity')))
+    mains, engines = [], []
+    for process in psutil.process_iter(['pid', 'name', 'exe', 'cmdline', 'username']):
+        try:
+            info = process.info
+            name = (info.get('name') or '').lower()
+            args = info.get('cmdline') or []
+            if name in ('antigravity.exe', 'language_server.exe') and not info.get('exe'):
+                candidate_user = info.get('username')
+                if isinstance(candidate_user, str) and candidate_user.strip() and candidate_user.casefold() != current_user:
+                    continue
+                raise RuntimeError('Cannot establish application executable ownership')
+            exe = os.path.normcase(os.path.abspath(info.get('exe') or ''))
+            # The same installation may serve several signed-in Windows users
+            # or sessions. Only this server's user/session owns this restart.
+            if not ((name == 'antigravity.exe' and exe in expected) or
+                    (name == 'language_server.exe' and exe in expected_engines)):
+                continue
+            process_user = info.get('username')
+            if not isinstance(process_user, str) or not process_user.strip():
+                raise RuntimeError('Cannot establish application process user ownership')
+            if process_user.casefold() != current_user:
+                continue
+            process_session = _windows_process_session_id(process.pid)
+            if not isinstance(process_session, int) or process_session < 0:
+                raise RuntimeError('Cannot establish application process session ownership')
+            if not isinstance(info.get('cmdline'), (list, tuple)) or not info['cmdline']:
+                raise RuntimeError('Cannot establish application profile ownership')
+            same_session = process_session == current_session
+            if name == 'language_server.exe' and exe in expected_engines:
+                app_data = None
+                for index, argument in enumerate(args):
+                    if argument == '--app_data_dir' and index + 1 < len(args):
+                        app_data = args[index + 1]
+                    elif argument.startswith('--app_data_dir='):
+                        app_data = argument.split('=', 1)[1]
+                if app_data == 'antigravity':
+                    if not same_session:
+                        raise RuntimeError('Primary database writer belongs to another session of this user')
+                    engines.append(process)
+                continue
+            if name != 'antigravity.exe' or exe not in expected:
+                continue
+            if any(a.startswith(('--type=', '--import')) for a in args):
+                continue
+            data_dir = None
+            for index, argument in enumerate(args):
+                if argument.startswith('--user-data-dir='):
+                    data_dir = argument.split('=', 1)[1].strip('"')
+                elif argument == '--user-data-dir' and index + 1 < len(args):
+                    data_dir = args[index + 1].strip('"')
+            if data_dir and os.path.normcase(os.path.abspath(data_dir)) != primary_data:
+                continue
+            if not same_session:
+                raise RuntimeError('Primary application belongs to another session of this user')
+            mains.append(process)
+        except psutil.NoSuchProcess:
+            continue
+    return mains, engines
+
+
+def restart_language_server():
+    """Restart through the owning app; never terminate an SQLite writer alone."""
+    return restart_antigravity()
+
+
+def restart_antigravity(force=False):
+    """Request normal app exit, wait for its engine, and fail closed on timeout."""
     sys_name = quota_engine.get_current_system()
     if sys_name == 'windows':
-        subprocess.run(['powershell', '-NoProfile', '-Command', 'Get-Process -Name Antigravity, language_server -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue'], capture_output=True, creationflags=0x08000000)
-        # Wait up to 5s until Antigravity and language_server processes have cleanly exited
-        for _ in range(15):
-            res = subprocess.run(['powershell', '-NoProfile', '-Command', '(Get-Process -Name Antigravity, language_server -ErrorAction SilentlyContinue).Count'], capture_output=True, text=True, creationflags=0x08000000)
-            count_str = (res.stdout or '').strip()
-            if not count_str or count_str == '0':
-                break
-            time.sleep(0.3)
-        time.sleep(0.6)
-        paths = [
-            os.path.expandvars(r"%LOCALAPPDATA%\Programs\antigravity\Antigravity.exe"),
-            os.path.expandvars(r"%ProgramFiles%\Antigravity\Antigravity.exe"),
-            os.path.expandvars(r"%ProgramFiles(x86)%\Antigravity\Antigravity.exe"),
-        ]
-        exe = next((p for p in paths if os.path.exists(p)), None)
-        if exe:
-            DETACHED_PROCESS = 0x00000008
-            CREATE_NEW_PROCESS_GROUP = 0x00000200
-            subprocess.Popen([exe], creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
-        else:
-            subprocess.run(['powershell', '-NoProfile', '-Command', 'Start-Process Antigravity'], capture_output=True, creationflags=0x08000000)
-
-        # Self-healing watchdog: ensure sync_daemon is revived and ready to inject UI
-        def _revive_daemon_watchdog():
-            time.sleep(1.2)
-            ensure_daemon_running()
-        threading.Thread(target=_revive_daemon_watchdog, daemon=True).start()
-    elif sys_name == 'macos':
-        subprocess.run(['pkill', '-9', '-f', '/Applications/Antigravity.app'], capture_output=True)
-        subprocess.run(['pkill', '-9', '-f', 'language_server'], capture_output=True)
-        time.sleep(1.0)
+        import psutil
+        try:
+            mains, engines = _primary_antigravity_processes()
+            # Retain the installation that actually owns the primary profile.
+            # Another installed copy must not replace it merely due to path order.
+            owners = {os.path.normcase(os.path.abspath(p.info['exe'])):p.info['exe'] for p in mains}
+            for process in engines:
+                engine_exe = process.info['exe']
+                owner = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(engine_exe))), 'Antigravity.exe')
+                owners.setdefault(os.path.normcase(os.path.abspath(owner)), owner)
+            if len(owners) > 1:
+                print('[RESTART] Refused: multiple installations own the primary profile', flush=True)
+                return False
+            exe = next(iter(owners.values()), None)
+            if exe is None:
+                exe = next((path for path in _antigravity_executable_paths() if os.path.exists(path)), None)
+            if not exe or not os.path.exists(exe):
+                print('[RESTART] Refused: owning executable is unavailable', flush=True)
+                return False
+            for process in mains:
+                result = subprocess.run(
+                    ['powershell', '-NoProfile', '-Command',
+                     f'Get-Process -Id {int(process.pid)} -ErrorAction SilentlyContinue | ForEach-Object {{ $_.CloseMainWindow() | Out-Null }}'],
+                    capture_output=True, creationflags=0x08000000, timeout=10)
+                if result.returncode != 0:
+                    print('[RESTART] Refused: normal window-close request failed', flush=True)
+                    return False
+            _, alive = psutil.wait_procs(mains + engines, timeout=15)
+            if alive:
+                print('[RESTART] Refused: primary app or database writer remains active', flush=True)
+                return False
+            # Re-check every supported install after waiting. A newly launched
+            # primary must not receive a second launcher from this request.
+            current_mains, current_engines = _primary_antigravity_processes()
+            if current_mains or current_engines:
+                print('[RESTART] Refused: primary app or writer appeared during shutdown', flush=True)
+                return False
+            env = dict(os.environ)
+            env.setdefault('GOMEMLIMIT', '3GiB')
+            env.setdefault('GOGC', '50')
+            subprocess.Popen([exe], env=env, creationflags=0x00000008 | 0x00000200 | 0x08000000)
+            return True
+        except Exception as error:
+            print(f'[RESTART] Safe restart did not complete: {error}', flush=True)
+            return False
+    if sys_name == 'macos':
+        result = subprocess.run(['osascript', '-e', 'tell application "Antigravity" to quit'], capture_output=True)
+        if result.returncode != 0:
+            return False
         subprocess.Popen(['open', '/Applications/Antigravity.app'])
-        threading.Thread(target=lambda: (time.sleep(1.5), ensure_daemon_running()), daemon=True).start()
+        return True
+    return False
+
+
+def restart_after_account_switch():
+    """A launcher being accepted does not establish engine readiness or fresh auth."""
+    try:
+        launched = restart_antigravity() is True
+    except Exception as error:
+        print(f'[RESTART] Safe restart raised {type(error).__name__}', flush=True)
+        launched = False
+    result = {'requested': True, 'launched': launched, 'completed': False,
+              'status': 'launch_requested' if launched else 'refused'}
+    if not launched:
+        result['error'] = 'Safe restart did not complete; see the restart log for the reason.'
+    print(f"[RESTART RESULT] {result['status']}", flush=True)
+    return result
+
 
 def write_token_to_credential_manager(token):
     sys_name = quota_engine.get_current_system()
@@ -856,7 +980,8 @@ def launch_dual_instance(account_key, project_path=None):
         else:
             return {'success': False, 'error': 'Multi-instance launch is optimized for Windows/macOS'}
 
-def switch_account(account_key, no_restart=False):
+def switch_account(account_key, no_restart=True):
+    sys_name = quota_engine.get_current_system()
     manifest = load_manifest()
     entry = manifest.get(account_key)
     if not entry:
@@ -919,6 +1044,7 @@ def switch_account(account_key, no_restart=False):
         'pools': [
             {'name': 'Gemini 3.8 Flash High', 'used_pct': round(100.0 - rem, 1), 'remaining_pct': round(rem, 1), 'resets_in': 'Ready'},
             {'name': 'Gemini 3.1 Pro', 'used_pct': round(100.0 - rem, 1), 'remaining_pct': round(rem, 1), 'resets_in': 'Ready'},
+            {'name': 'Argon', 'used_pct': 100.0, 'remaining_pct': 0.0, 'resets_in': '4 d', 'weekly_rem': 0.0, 'weekly_pct': 100.0, 'weekly_resets': '4 d'},
             {'name': 'Claude Sonnet 4.6', 'used_pct': 0.0, 'remaining_pct': 100.0, 'resets_in': 'Ready'},
             {'name': 'GPT-OSS 120B', 'used_pct': 0.0, 'remaining_pct': 100.0, 'resets_in': 'Ready'}
         ]
@@ -974,9 +1100,13 @@ def switch_account(account_key, no_restart=False):
     except Exception:
         pass
 
+    result = {'success': True, 'account': account_key, 'quota': quota_data,
+              'restart': {'requested': False, 'launched': False, 'completed': False, 'status': 'not_requested'}}
     if not no_restart:
-        restart_antigravity()
-    return {'success': True, 'account': account_key, 'quota': quota_data}
+        result['restart'] = restart_after_account_switch()
+        if result['restart']['status'] == 'refused':
+            result['warning'] = 'حساب تغییر یافت؛ راه‌اندازی مجدد ایمن انجام نشد. وضعیت برنامه را بررسی کنید.'
+    return result
 
 def save_current_account():
     token = quota_engine.get_keychain_token()
@@ -1552,7 +1682,7 @@ class SwitcherHTTPHandler(SimpleHTTPRequestHandler):
             resp = {'success': ok, 'settings': res}
         elif self.path == '/api/switch':
             acc_key = data.get('accountKey')
-            resp = switch_account(acc_key, no_restart=data.get('noRestart', False))
+            resp = switch_account(acc_key, no_restart=data.get('noRestart', True))
         elif self.path in ('/api/launch_dual', '/api/launch_instance'):
             acc_key = data.get('accountKey') or data.get('account') or data.get('email')
             project_path = data.get('projectPath') or data.get('path')

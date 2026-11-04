@@ -20,6 +20,7 @@ inspect_*.py
 check_*.py
 test_*.py
 *.png
+!assets/*.png
 
 # macOS system files
 .DS_Store

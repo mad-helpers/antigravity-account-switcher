@@ -220,7 +220,7 @@ def get_project_conversation_counts():
     counts = {}
     if os.path.exists(CONVERSATION_SUMMARIES_DB):
         try:
-            conn = sqlite3.connect(CONVERSATION_SUMMARIES_DB, timeout=3.0)
+            conn = sqlite3.connect(f"file:{CONVERSATION_SUMMARIES_DB}?mode=ro", uri=True, timeout=30.0)
             cur = conn.cursor()
             cur.execute("SELECT project_id, COUNT(*) FROM conversation_summaries GROUP BY project_id")
             for row in cur.fetchall():
@@ -545,7 +545,7 @@ def get_conversation_summaries_metadata():
     meta = {}
     if os.path.exists(CONVERSATION_SUMMARIES_DB):
         try:
-            conn = sqlite3.connect(CONVERSATION_SUMMARIES_DB, timeout=3.0)
+            conn = sqlite3.connect(f"file:{CONVERSATION_SUMMARIES_DB}?mode=ro", uri=True, timeout=30.0)
             cur = conn.cursor()
             cur.execute("SELECT conversation_id, title, preview, project_id, workspace_uris, app_data_dir FROM conversation_summaries")
             for row in cur.fetchall():
@@ -683,7 +683,8 @@ def assign_conversation_account(conv_id, account, action='add'):
             if conv_id in c_list:
                 c_list.remove(conv_id)
 
-    save_profile_sync_manifest(manifest)
+    if not save_profile_sync_manifest(manifest):
+        return {"success": False, "error": "Conversation profile could not be saved", "conversation_id": conv_id}
     return {"success": True, "conversation_id": conv_id, "assigned_accounts": assigned}
 
 # ==============================================================================
@@ -1358,137 +1359,610 @@ def run_guarded_task(task_name, custom_command=None):
 # 4. SAFETY BACKUP & CONVERSATION CLONING / MERGING
 # ==============================================================================
 
-def create_safety_backup(conv_ids):
-    """Create a safety backup archive of targeted conversations before migration."""
-    ensure_dirs()
-    ts = time.strftime('%Y%m%d_%H%M%S')
-    backup_target = os.path.join(BACKUP_DIR, f"pre_migration_{ts}")
-    os.makedirs(backup_target, exist_ok=True)
-    
-    for cid in conv_ids:
-        src_db = os.path.join(CONVERSATIONS_DIR, f"{cid}.db")
-        if os.path.exists(src_db):
-            shutil.copy2(src_db, os.path.join(backup_target, f"{cid}.db"))
-        src_brain = os.path.join(BRAIN_DIR, cid)
-        if os.path.exists(src_brain):
-            shutil.copytree(src_brain, os.path.join(backup_target, f"brain_{cid}"), dirs_exist_ok=True)
-            
-    return backup_target
+def _migration_sql_name(name):
+    return '"' + name.replace('"', '""') + '"'
 
-def clone_single_conversation(source_cid, new_cid=None, target_account=None):
-    """
-    Clone a single conversation database and brain folder with a new UUID.
-    Assigns the new conversation to target_account if provided.
-    """
-    if not new_cid:
-        new_cid = str(uuid.uuid4())
 
-    src_db = os.path.join(CONVERSATIONS_DIR, f"{source_cid}.db")
-    dst_db = os.path.join(CONVERSATIONS_DIR, f"{new_cid}.db")
+def _migration_path(cid):
+    # An identifier must never turn a migration into a path outside its store.
+    if not isinstance(cid, str) or str(uuid.UUID(cid)) != cid.lower():
+        raise ValueError('Invalid conversation identifier')
+    return os.path.join(CONVERSATIONS_DIR, cid + '.db')
 
-    if not os.path.exists(src_db):
-        return None
 
-    # Copy DB file
-    shutil.copy2(src_db, dst_db)
+def _migration_open_readonly(path):
+    if not os.path.isfile(path):
+        raise FileNotFoundError(path)
+    return sqlite3.connect(Path(path).resolve().as_uri() + '?mode=ro', uri=True, timeout=5.0)
 
-    # Update internal cascade_id / trajectory_meta inside SQLite db
-    try:
-        conn = sqlite3.connect(dst_db)
-        cursor = conn.cursor()
-        cursor.execute("UPDATE trajectory_meta SET cascade_id = ?", (new_cid,))
-        conn.commit()
-        conn.close()
-    except Exception:
+
+def _migration_snapshot(source, destination):
+    # SQLite's backup API reads committed WAL frames in one consistent snapshot.
+    # Reserve the path before opening SQLite: existing conversations must survive.
+    if any(os.path.lexists(destination + suffix) for suffix in ('','-wal','-shm')):
+        raise FileExistsError('Destination database or recovery sidecar already exists')
+    with open(destination, 'xb'):
         pass
+    src = dst = None
+    try:
+        src = _migration_open_readonly(source)
+        dst = sqlite3.connect(destination, timeout=5.0)
+        deadline = time.monotonic() + 30.0
+        def progress(status, remaining, total):
+            if time.monotonic() > deadline:
+                raise TimeoutError('SQLite backup did not finish within 30 seconds')
+        src.backup(dst, pages=256, progress=progress, sleep=0.02)
+        dst.execute('PRAGMA journal_mode=DELETE')
+        if dst.execute('PRAGMA quick_check').fetchone() != ('ok',):
+            raise ValueError('SQLite backup failed integrity check')
+    finally:
+        if dst is not None:
+            dst.close()
+        if src is not None:
+            src.close()
 
-    # Copy Brain folder
-    src_brain = os.path.join(BRAIN_DIR, source_cid)
-    dst_brain = os.path.join(BRAIN_DIR, new_cid)
-    if os.path.exists(src_brain):
-        shutil.copytree(src_brain, dst_brain, dirs_exist_ok=True)
-        t_path = os.path.join(dst_brain, '.system_generated', 'logs', 'transcript.jsonl')
-        if os.path.exists(t_path):
-            try:
-                with open(t_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read()
-                content = content.replace(source_cid, new_cid)
-                with open(t_path, 'w', encoding='utf-8') as f:
-                    f.write(content)
-            except Exception:
-                pass
 
-    # Also register cloned entry in conversation_summaries.db
-    if os.path.exists(CONVERSATION_SUMMARIES_DB):
+def _migration_tables(conn):
+    return {row[0]: tuple(r[1] for r in conn.execute('PRAGMA table_info(' + _migration_sql_name(row[0]) + ')'))
+            for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
+
+
+def _migration_inspect(conn, allow_embedded=False):
+    tables = _migration_tables(conn)
+    required = {'trajectory_meta': {'trajectory_id', 'cascade_id'}, 'steps': {'idx', 'step_type', 'status', 'step_payload', 'step_format'}}
+    for name, columns in required.items():
+        if not columns.issubset(tables.get(name, ())):
+            raise ValueError('Unsupported conversation schema: ' + name)
+    meta = conn.execute('SELECT trajectory_id,cascade_id FROM trajectory_meta').fetchall()
+    if len(meta) != 1 or not all(isinstance(v, str) and v for v in meta[0]):
+        raise ValueError('Conversation must contain exactly one identified trajectory')
+    counts = {name: conn.execute('SELECT COUNT(*) FROM ' + _migration_sql_name(name)).fetchone()[0] for name in tables}
+    if not allow_embedded and 'has_subtrajectory' in tables['steps'] and conn.execute('SELECT 1 FROM steps WHERE has_subtrajectory != 0 LIMIT 1').fetchone():
+        raise ValueError('Embedded subtrajectory graphs require a graph-aware native import')
+    validation_schema = _migration_get_validation_schema()
+    for (idx, fmt, payload) in conn.execute('SELECT idx,step_format,step_payload FROM steps'):
+        if not isinstance(idx, int) or idx < 0 or fmt != 0 or not isinstance(payload, bytes):
+            raise ValueError('Unsupported step index or payload format')
+        _migration_validate_wire(payload,'gemini_coder.Step',validation_schema,allow_embedded=allow_embedded)
+        fields = _migration_parse_wire(payload)
+        values = {n:v for n,w,v in fields if n in (1,4) and w == 0}
+        step_type,status = conn.execute('SELECT step_type,status FROM steps WHERE idx=?',(idx,)).fetchone()
+        if values.get(1,0) != step_type or values.get(4,0) != status:
+            raise ValueError('Step payload disagrees with its SQL envelope')
+    known = {'trajectory_meta','steps','gen_metadata','executor_metadata','parent_references','trajectory_metadata_blob','battle_mode_infos'}
+    for table,count in counts.items():
+        if table not in known and count:
+            raise ValueError('Unsupported populated conversation table: ' + table)
+        if table in ('gen_metadata','executor_metadata','parent_references','battle_mode_infos'):
+            if not {'idx','data'}.issubset(tables[table]):
+                raise ValueError('Unsupported metadata schema: ' + table)
+            if any(not isinstance(row[0],int) or row[0] < 0 for row in conn.execute('SELECT idx FROM ' + table)):
+                raise ValueError('Unsupported metadata index: ' + table)
+    if 'trajectory_metadata_blob' in tables:
+        rows = conn.execute('SELECT id FROM trajectory_metadata_blob').fetchall()
+        if rows not in ([],[('main',)]):
+            raise ValueError('Unsupported trajectory metadata singleton')
+    if conn.execute('PRAGMA quick_check').fetchone() != ('ok',):
+        raise ValueError('Conversation failed integrity check')
+    return {'tables': tables, 'counts': counts, 'trajectory_id': meta[0][0], 'cascade_id': meta[0][1]}
+
+
+def _migration_signature(conn):
+    import hashlib
+    digest = hashlib.sha256()
+    for name, cols in sorted(_migration_tables(conn).items()):
+        digest.update(repr((name, cols)).encode('utf-8'))
+        for row in sorted(conn.execute('SELECT * FROM ' + _migration_sql_name(name)).fetchall(), key=repr):
+            digest.update(repr(row).encode('utf-8'))
+            digest.update(b'\n')
+    return digest.hexdigest()
+
+
+def _migration_read_varint(data, pos):
+    value = 0
+    shift = 0
+    for _ in range(10):
+        if pos >= len(data):
+            raise ValueError('truncated _migration_varint')
+        b = data[pos]
+        pos += 1
+        value |= (b & 127) << shift
+        if b < 128:
+            if value >= (1 << 64):
+                raise ValueError('oversized protobuf varint')
+            return value, pos
+        shift += 7
+    raise ValueError('oversized _migration_varint')
+
+
+def _migration_parse_wire(data):
+    pos = 0
+    fields = []
+    while pos < len(data):
+        key, pos = _migration_read_varint(data, pos)
+        number, wire = key >> 3, key & 7
+        if number == 0 or number >= (1 << 29):
+            raise ValueError('zero field')
+        if wire == 0:
+            value, pos = _migration_read_varint(data, pos)
+        elif wire in (1, 2, 5):
+            if wire == 2:
+                size, pos = _migration_read_varint(data, pos)
+            else:
+                size = 8 if wire == 1 else 4
+            if pos + size > len(data):
+                raise ValueError('truncated field')
+            value = data[pos:pos + size]
+            pos += size
+        else:
+            raise ValueError('unsupported wire type')
+        fields.append((number, wire, value))
+    return fields
+
+
+def _migration_varint(n):
+    if n < 0:
+        n += 1 << 64
+    out = bytearray()
+    while n > 127:
+        out.append((n & 127) | 128)
+        n >>= 7
+    out.append(n)
+    return bytes(out)
+
+
+def _migration_encode_wire(fields):
+    out = bytearray()
+    for n, w, value in fields:
+        out += _migration_varint((n << 3) | w)
+        if w == 0:
+            out += _migration_varint(value)
+        elif w == 2:
+            out += _migration_varint(len(value)) + value
+        elif w in (1, 5):
+            out += value
+        else:
+            raise ValueError('unsupported wire type')
+    return bytes(out)
+
+
+
+
+def _migration_get_validation_schema():
+    factory = globals().get('_migration_validation_schema')
+    if factory is None:
+        from migration_proto_schema import _migration_validation_schema as factory
+    return factory()
+
+
+def _migration_validate_wire(data, message, schema=None, depth=0, allow_embedded=True):
+    if schema is None:
+        schema = _migration_get_validation_schema()
+    if not allow_embedded and depth and message == 'gemini_coder.Trajectory':
+        raise ValueError('Embedded subtrajectory graphs require a graph-aware native import')
+    if depth > 100 or not isinstance(data,bytes):
+        raise ValueError('Unsupported protobuf data or nesting')
+    rules = schema.get(message)
+    if rules is None:
+        raise ValueError('Unsupported protobuf message schema: ' + message)
+    for n,w,value in _migration_parse_wire(data):
+        rule = rules.get(str(n))
+        if rule is None:
+            continue  # Protobuf unknown fields are deliberately preserved.
+        kind,nested,repeated = rule
+        expected = 1 if kind in (1,6,16) else 5 if kind in (2,7,15) else 2 if kind in (9,11,12) else 0
+        if w != expected:
+            if w == 2 and repeated and expected in (0,1,5):
+                if expected in (1,5):
+                    if len(value) % (8 if expected == 1 else 4):
+                        raise ValueError('Truncated packed protobuf field')
+                else:
+                    pos = 0
+                    while pos < len(value):
+                        _,pos = _migration_read_varint(value,pos)
+                continue
+            raise ValueError('Protobuf field has an invalid wire type')
+        if kind == 9:
+            value.decode('utf-8')
+        elif kind == 11:
+            _migration_validate_wire(value,nested,schema,depth+1,allow_embedded)
+
+
+def _migration_wire_schema():
+    # Reference-bearing paths reconstructed from the installed public frontend
+    # descriptors. User text and unknown fields are preserved; no UUID text search.
+    return json.loads(r'''{"exa.cortex_pb.CortexTrajectoryMetadata":{"4":["message","exa.cortex_pb.AgentScriptItem"],"5":["id","parent_conversation_id"],"6":["id","root_conversation_id"],"10":["message","exa.cortex_pb.CustomAgentSpec"],"12":["message","exa.cortex_pb.SourceMetadata"],"22":["message","exa.cortex_pb.BattleModeMetadata"]},"exa.cortex_pb.CortexStepMetadata":{"12":["execution","execution_id"],"20":["message","exa.cortex_pb.SourceTrajectoryStepInfo"]},"exa.cortex_pb.CortexStepGeneratorMetadata":{"1":["message","exa.cortex_pb.ChatModelMetadata"],"2":["step",true],"3":["message","exa.cortex_pb.CascadePlannerConfig"],"4":["execution","execution_id"]},"exa.cortex_pb.ExecutorMetadata":{"3":["step",false],"6":["message","exa.codeium_common_pb.MetricsRecord"],"7":["message","exa.codeium_common_pb.MetricsRecord"],"9":["execution","execution_id"],"10":["message","exa.cortex_pb.CascadeConfig"],"16":["message","exa.cortex_pb.AgentConfigResolution"],"17":["message","exa.cortex_pb.CascadeConfig"]},"exa.cortex_pb.CortexTrajectoryReference":{"1":["id","trajectory_id"],"2":["step",false],"6":["id","conversation_id"]},"exa.cortex_pb.BattleModeInfo":{"1":["id","children_conversation_ids"],"2":["id","winning_conversation_id"],"3":["step",false],"4":["step",false],"8":["id","children_trajectory_ids"],"18":["id","reference_conversation_id"]},"exa.jetski_cortex_pb.CascadeTrajectorySummary":{"4":["id","trajectory_id"],"8":["message","exa.jetski_cortex_pb.CortexTrajectoryStepWithIndex"],"12":["message","exa.jetski_cortex_pb.CortexTrajectoryStepWithIndex"],"14":["message","exa.jetski_cortex_pb.CortexTrajectoryStepWithIndex"],"16":["step",false],"17":["message","exa.cortex_pb.CortexTrajectoryMetadata"],"19":["message","exa.cortex_pb.BattleModeInfo"],"24":["id","fork_parent_conversation_id"]},"exa.cortex_pb.StepRenderInfo":{"9":["message","exa.cortex_pb.StepRenderInfo.TitlePart"],"10":["message","exa.cortex_pb.StepRenderInfo.ContentBlock"]},"gemini_coder.Step":{"5":["message","exa.cortex_pb.CortexStepMetadata"],"6":["message","gemini_coder.Trajectory"],"10":["message","exa.cortex_pb.CortexStepCodeAction"],"19":["message","exa.cortex_pb.CortexStepUserInput"],"30":["message","exa.cortex_pb.CortexStepCheckpoint"],"32":["message","exa.cortex_pb.CortexStepProposeCode"],"47":["message","exa.cortex_pb.CortexStepMcpTool"],"52":["message","exa.cortex_pb.CortexStepTrajectoryChoice"],"71":["message","exa.cortex_pb.CortexStepProposalFeedback"],"95":["message","exa.cortex_pb.CortexStepCodeAcknowledgement"],"114":["message","exa.cortex_pb.CortexStepSystemMessage"],"129":["message","exa.cortex_pb.CortexStepKIInsertion"],"140":["message","exa.cortex_pb.CortexStepGeneric"],"143":["message","exa.cortex_pb.CortexStepInvokeSubagent"],"147":["message","exa.cortex_pb.CompletedInteraction"],"159":["message","gemini_coder.Step"]},"exa.cortex_pb.CustomAgentSpec":{"3":["message","exa.cortex_pb.BuiltinAgentConfig"],"11":["message","exa.cortex_pb.CascadeConfig"],"15":["message","exa.cortex_pb.AgentDiscoveryConfig"],"17":["message","exa.cortex_pb.CustomizationConfig"],"18":["message","exa.cortex_pb.AgentConfig"]},"exa.cortex_pb.SourceMetadata":{"1":["message","exa.cortex_pb.ToolSourceMetadata"]},"exa.cortex_pb.AgentScriptItem":{"7":["message","exa.cortex_pb.CustomAgentSpec"],"11":["message","exa.cortex_pb.CascadeConfig"]},"exa.cortex_pb.BattleModeMetadata":{"2":["id","parent_conversation_id"]},"exa.cortex_pb.SourceTrajectoryStepInfo":{"1":["id","trajectory_id"],"2":["step",false],"3":["gen",false],"4":["id","cascade_id"]},"exa.cortex_pb.ChatModelMetadata":{"2":["message","exa.chat_pb.ChatMessagePrompt"],"9":["message","exa.cortex_pb.ChatStartMetadata"]},"exa.cortex_pb.CascadePlannerConfig":{"2":["message","exa.cortex_pb.CascadeConversationalPlannerConfig"],"26":["message","exa.cortex_pb.CascadeConversationalPlannerConfig"],"36":["message","exa.cortex_pb.CascadeConversationalPlannerConfig"],"42":["message","exa.cortex_pb.CustomizationConfig"],"44":["message","exa.cortex_pb.CascadeConversationalPlannerConfig"],"46":["message","exa.cortex_pb.DeclarativeComponentConfig"],"57":["message","exa.cortex_pb.CustomizationDiscoveryConfig"]},"exa.codeium_common_pb.MetricsRecord":{"7":["id","trajectory_id"]},"exa.cortex_pb.CascadeConfig":{"1":["message","exa.cortex_pb.CascadePlannerConfig"]},"exa.cortex_pb.AgentConfigResolution":{"1":["message","exa.cortex_pb.CustomAgentSpec"]},"exa.jetski_cortex_pb.CortexTrajectoryStepWithIndex":{"1":["message","gemini_coder.Step"],"2":["step",false]},"exa.cortex_pb.StepRenderInfo.TitlePart":{"5":["message","exa.cortex_pb.StepRenderInfo.AgentRef"]},"exa.cortex_pb.StepRenderInfo.ContentBlock":{"4":["message","exa.cortex_pb.StepRenderInfo.AgentRef"],"5":["message","exa.cortex_pb.StepRenderInfo.StepBlock"]},"exa.cortex_pb.CompletedInteraction":{"2":["message","exa.cortex_pb.CascadeUserInteraction"]},"exa.cortex_pb.CortexStepGeneric":{"2":["message","exa.cortex_pb.GenericStepResult"]},"exa.cortex_pb.CortexStepCodeAction":{"1":["message","exa.cortex_pb.ActionSpec"]},"exa.cortex_pb.CortexStepMcpTool":{"9":["message","exa.cortex_pb.StepRenderInfo"]},"exa.cortex_pb.CortexStepCodeAcknowledgement":{"7":["message","exa.cortex_pb.CodeAcknowledgementInfo"]},"exa.cortex_pb.CortexStepSystemMessage":{"2":["message","exa.cortex_pb.StepRenderInfo"],"4":["message","exa.cortex_pb.AgentMessage"]},"exa.cortex_pb.CortexStepKIInsertion":{"1":["message","exa.cortex_pb.CortexStepKIInsertion.KiReferencesEntry"]},"exa.cortex_pb.CortexStepInvokeSubagent":{"5":["id","conversation_id"],"10":["message","exa.cortex_pb.SubagentResult"]},"exa.cortex_pb.CortexStepUserInput":{"12":["message","exa.cortex_pb.CascadeConfig"],"13":["message","exa.cortex_pb.CascadeConfig"],"18":["message","exa.cortex_pb.CustomAgentSpec"]},"exa.cortex_pb.CortexStepCheckpoint":{"3":["step",true],"11":["step",false],"12":["step",false],"18":["message","exa.cortex_pb.TrajectoryFileDiff"],"20":["message","exa.cortex_pb.SubagentSnapshot"],"21":["message","exa.cortex_pb.TaskSnapshot"],"25":["step",false],"26":["message","exa.cortex_pb.AccumulatedSection"]},"exa.cortex_pb.CortexStepProposeCode":{"1":["message","exa.cortex_pb.ActionSpec"]},"exa.cortex_pb.CortexStepTrajectoryChoice":{"1":["id","proposal_trajectory_ids"]},"exa.cortex_pb.CortexStepProposalFeedback":{"2":["step",false]},"gemini_coder.Trajectory":{"1":["id","trajectory_id"],"2":["message","gemini_coder.Step"],"3":["message","exa.cortex_pb.CortexStepGeneratorMetadata"],"5":["message","exa.cortex_pb.CortexTrajectoryReference"],"6":["id","cascade_id"],"7":["message","exa.cortex_pb.CortexTrajectoryMetadata"],"9":["message","exa.cortex_pb.ExecutorMetadata"],"10":["message","exa.cortex_pb.BattleModeInfo"]},"exa.cortex_pb.AgentConfig":{"1":["message","exa.cortex_pb.DeclarativeComponentConfig"],"3":["message","exa.cortex_pb.CascadeConfig"],"4":["message","exa.cortex_pb.CustomizationDiscoveryConfig"]},"exa.cortex_pb.BuiltinAgentConfig":{"3":["message","exa.cortex_pb.CascadeConfig"],"4":["message","exa.cortex_pb.CustomizationDiscoveryConfig"]},"exa.cortex_pb.CustomizationConfig":{"15":["message","exa.cortex_pb.CustomizationDiscoveryConfig"],"18":["id","customization_server_origin_conversation_id"]},"exa.cortex_pb.AgentDiscoveryConfig":{"3":["message","exa.cortex_pb.AgentScriptItem"]},"exa.cortex_pb.ToolSourceMetadata":{"1":["id","conversation_id"],"2":["step",false]},"exa.chat_pb.ChatMessagePrompt":{"18":["step",false],"26":["step",true]},"exa.cortex_pb.ChatStartMetadata":{"1":["step",false]},"exa.cortex_pb.CascadeConversationalPlannerConfig":{"20":["id","override_cascade_id_for_prompt"]},"exa.cortex_pb.DeclarativeComponentConfig":{"1":["message","exa.cortex_pb.FunctionProvider"]},"exa.cortex_pb.CustomizationDiscoveryConfig":{"2":["message","exa.cortex_pb.AgentDiscoveryConfig"]},"exa.cortex_pb.StepRenderInfo.AgentRef":{"1":["id","conversation_id"]},"exa.cortex_pb.StepRenderInfo.StepBlock":{"1":["message","exa.cortex_pb.StepRenderInfo"]},"exa.cortex_pb.CascadeUserInteraction":{"1":["id","trajectory_id"],"2":["step",false]},"exa.cortex_pb.GenericStepResult":{"3":["message","exa.cortex_pb.StepRenderInfo"]},"exa.cortex_pb.ActionSpec":{"3":["step",true]},"exa.cortex_pb.CodeAcknowledgementInfo":{"2":["step",true]},"exa.cortex_pb.AgentMessage":{"12":["message","exa.cortex_pb.SourceMetadata"]},"exa.cortex_pb.CortexStepKIInsertion.KiReferencesEntry":{"2":["message","exa.cortex_pb.KnowledgeReferences"]},"exa.cortex_pb.SubagentResult":{"1":["id","conversation_id"]},"exa.cortex_pb.TrajectoryFileDiff":{"8":["step",false],"9":["step",false]},"exa.cortex_pb.SubagentSnapshot":{"5":["message","exa.cortex_pb.SubagentResult"],"7":["step",false]},"exa.cortex_pb.TaskSnapshot":{"6":["step",false]},"exa.cortex_pb.AccumulatedSection":{"4":["message","exa.cortex_pb.AccumulatedItem"]},"exa.cortex_pb.FunctionProvider":{"4":["id","provider_origin_conversation_id"]},"exa.cortex_pb.KnowledgeReferences":{"1":["message","exa.cortex_pb.KnowledgeReference"]},"exa.cortex_pb.AccumulatedItem":{"3":["message","exa.cortex_pb.AccumulatedItemRenderInfo"]},"exa.cortex_pb.KnowledgeReference":{"2":["id","conversation_id"]},"exa.cortex_pb.AccumulatedItemRenderInfo":{"5":["message","exa.cortex_pb.TrajectoryFileDiff"]}}''')
+
+
+def _migration_rewrite_wire(data, message, context, depth=0):
+    if data is None:
+        return None
+    if depth > 100 or not isinstance(data, bytes):
+        raise ValueError('Invalid or excessive protobuf nesting')
+    if depth == 0:
+        if '_validation_schema' not in context:
+            context['_validation_schema'] = _migration_get_validation_schema()
+        _migration_validate_wire(data,message,context['_validation_schema'])
+    fields = _migration_parse_wire(data)
+    if '_wire_schema' not in context:
+        context['_wire_schema'] = _migration_wire_schema()
+    rules = context['_wire_schema'].get(message, {})
+    # References to another trajectory use that trajectory's offsets, rather
+    # than blindly shifting an external parent's index by the current offset.
+    local = context
+    trajectory_refs = [v.decode('utf-8') for n,w,v in fields if w == 2 and rules.get(str(n)) == ['id','trajectory_id']]
+    conversation_refs = [v.decode('utf-8') for n,w,v in fields if w == 2 and rules.get(str(n),[None])[0] == 'id'
+                         and rules[str(n)][1] in ('conversation_id','cascade_id')]
+    references = trajectory_refs or conversation_refs
+    reference_contexts = context['trajectory_contexts' if trajectory_refs else 'conversation_contexts']
+    if references:
+        matches = [reference_contexts[v] for v in references if v in reference_contexts]
+        if matches:
+            if any(m['step_offset'] != matches[0]['step_offset'] or m['gen_offset'] != matches[0]['gen_offset'] for m in matches):
+                raise ValueError('Inconsistent trajectory reference')
+            local = dict(context, **matches[0])
+        else:
+            local = dict(context, step_offset=0, gen_offset=0)
+    # Proto3 scalars without presence omit zero on the wire. Their implicit
+    # index zero must move with the source segment, unlike absent optional
+    # indices or empty repeated lists. Presence exceptions come from the
+    # installed native descriptors (proto3_optional/oneof_index).
+    optional_indices = {
+        ('exa.jetski_cortex_pb.CascadeTrajectorySummary', 16),
+        ('exa.cortex_pb.CortexStepCheckpoint', 25),
+        ('exa.cortex_pb.TrajectoryFileDiff', 8),
+        ('exa.cortex_pb.TrajectoryFileDiff', 9),
+    }
+    present = {n for n, _, _ in fields}
+    for number, (kind, repeated) in rules.items():
+        number = int(number)
+        if (kind in ('step', 'gen') and not repeated and number not in present
+                and (message, number) not in optional_indices
+                and local['step_offset' if kind == 'step' else 'gen_offset']):
+            fields.append((number, 0, 0))
+    out = []
+    for n,w,value in fields:
+        rule = rules.get(str(n))
+        if rule:
+            kind, arg = rule
+            if kind == 'message':
+                if w != 2:
+                    raise ValueError('Invalid protobuf message wire type')
+                if not (arg == 'gemini_coder.Trajectory' and context.get('preserve_embedded_trajectories')):
+                    value = _migration_rewrite_wire(value, arg, local, depth + 1)
+            elif kind in ('id', 'execution'):
+                if w != 2:
+                    raise ValueError('Invalid protobuf identity wire type')
+                old = value.decode('utf-8')
+                if kind == 'id':
+                    domain = context['trajectory_map' if 'trajectory' in arg else 'conversation_map']
+                    value = domain.get(old,old).encode('utf-8')
+                elif old:
+                    value = context['execution_ids'].setdefault(old, str(uuid.uuid4())).encode('utf-8')
+            elif kind in ('step', 'gen'):
+                offset = local['step_offset' if kind == 'step' else 'gen_offset']
+                if w == 0:
+                    # Negative signed sentinels (e.g. -1) must remain sentinels.
+                    if value < (1 << 63):
+                        value += offset
+                elif w == 2 and arg:
+                    packed = bytearray()
+                    pos = 0
+                    while pos < len(value):
+                        index, pos = _migration_read_varint(value, pos)
+                        packed += _migration_varint(index + offset if index < (1 << 63) else index)
+                    value = bytes(packed)
+                else:
+                    raise ValueError('Invalid protobuf index wire type')
+        out.append((n,w,value))
+    return _migration_encode_wire(out)
+
+
+def _migration_summary(source_cid, new_cid, target_account, context, step_count, title=None):
+    conn = _migration_open_readonly(CONVERSATION_SUMMARIES_DB)
+    try:
+        cur = conn.execute('SELECT * FROM conversation_summaries WHERE conversation_id=?', (source_cid,))
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError('Source conversation has no summary')
+        summary = dict(zip([d[0] for d in cur.description], row))
+    finally:
+        conn.close()
+    if not isinstance(summary.get('raw_summary'), bytes):
+        raise ValueError('Source summary has no supported raw_summary')
+    raw = _migration_rewrite_wire(summary['raw_summary'], 'exa.jetski_cortex_pb.CascadeTrajectorySummary', context)
+    fields = [f for f in _migration_parse_wire(raw) if f[0] not in (2, 4) and not (title is not None and f[0] == 1)]
+    if title is not None:
+        fields.append((1,2,title.encode('utf-8')))
+    fields += [(2,0,step_count), (4,2,context['target_tid'].encode('utf-8'))]
+    summary['raw_summary'] = _migration_encode_wire(fields)
+    summary['conversation_id'] = new_cid
+    if 'step_count' in summary:
+        summary['step_count'] = step_count
+    if title is not None:
+        summary['title'] = title
+    if target_account and 'app_data_dir' in summary:
+        summary['app_data_dir'] = 'antigravity-instance2' if (target_account == 'instance_2' or norm_account(target_account) == get_secondary_account()) else 'antigravity'
+    return summary
+
+
+def _migration_merge_latest_summary(primary, latest):
+    # A merged trajectory keeps the first source's identity/project/creation,
+    # while the appended final segment supplies the latest state and indices.
+    latest_numbers = {3,5,8,10,12,14,16,18,19,21,23,25,26,28,29,30}
+    fields = [f for f in _migration_parse_wire(primary['raw_summary']) if f[0] not in latest_numbers]
+    fields.extend(f for f in _migration_parse_wire(latest['raw_summary']) if f[0] in latest_numbers)
+    result = dict(primary)
+    result['raw_summary'] = _migration_encode_wire(fields)
+    return result
+
+
+def _migration_context(source_cid, source_tid, target_cid, target_tid):
+    offsets = {'step_offset': 0, 'gen_offset': 0}
+    return dict(offsets, id_map={source_cid: target_cid, source_tid: target_tid},
+                trajectory_map={source_tid:target_tid},conversation_map={source_cid:target_cid},
+                trajectory_contexts={source_tid:offsets},conversation_contexts={source_cid:offsets},
+                reference_contexts={source_cid: offsets, source_tid: offsets}, execution_ids={}, target_tid=target_tid)
+
+
+def _migration_rewrite_database(conn, context, target_cid, target_tid):
+    tables = _migration_tables(conn)
+    conn.execute('UPDATE trajectory_meta SET cascade_id=?,trajectory_id=?', (target_cid,target_tid))
+    blob_types = {'gen_metadata': 'exa.cortex_pb.CortexStepGeneratorMetadata',
+                  'executor_metadata': 'exa.cortex_pb.ExecutorMetadata',
+                  'parent_references': 'exa.cortex_pb.CortexTrajectoryReference',
+                  'trajectory_metadata_blob': 'exa.cortex_pb.CortexTrajectoryMetadata',
+                  'battle_mode_infos': 'exa.cortex_pb.BattleModeInfo'}
+    for table, message in blob_types.items():
+        if table not in tables:
+            continue
+        cols = tables[table]
+        key = 'id' if table == 'trajectory_metadata_blob' else 'idx'
+        if 'data' not in cols or key not in cols:
+            raise ValueError('Unsupported metadata schema: ' + table)
+        for ident, data in conn.execute('SELECT ' + key + ',data FROM ' + table).fetchall():
+            rewritten = _migration_rewrite_wire(data, message, context)
+            if 'size' in cols:
+                conn.execute('UPDATE ' + table + ' SET data=?,size=? WHERE ' + key + '=?', (rewritten,len(rewritten) if rewritten is not None else 0,ident))
+            else:
+                conn.execute('UPDATE ' + table + ' SET data=? WHERE ' + key + '=?', (rewritten,ident))
+    step_blobs = {'metadata': 'exa.cortex_pb.CortexStepMetadata', 'render_info': 'exa.cortex_pb.StepRenderInfo', 'step_payload': 'gemini_coder.Step'}
+    for idx, in conn.execute('SELECT idx FROM steps').fetchall():
+        for col, message in step_blobs.items():
+            if col in tables['steps']:
+                data = conn.execute('SELECT ' + col + ' FROM steps WHERE idx=?', (idx,)).fetchone()[0]
+                conn.execute('UPDATE steps SET ' + col + '=? WHERE idx=?', (_migration_rewrite_wire(data,message,context),idx))
+
+
+def _migration_validate_target(record):
+    conn = _migration_open_readonly(record['db_path'])
+    try:
+        info = _migration_inspect(conn,allow_embedded=record.get('allows_embedded',False))
+        if info['cascade_id'] != record['target_id'] or info['trajectory_id'] != record['trajectory_id']:
+            raise ValueError('Target identity verification failed')
+        if info['counts'] != record['expected_counts']:
+            raise ValueError('Target row count verification failed')
+        if record['summary'].get('conversation_id') != record['target_id'] or record['expected_step_count'] != info['counts']['steps']:
+            raise ValueError('Target summary count or conversation identity disagrees with its database')
+        raw = _migration_parse_wire(record['summary']['raw_summary'])
+        if not any(n == 2 and w == 0 and v == info['counts']['steps'] for n,w,v in raw):
+            raise ValueError('Target raw summary step count verification failed')
+        if not any(n == 4 and w == 2 and v == info['trajectory_id'].encode('utf-8') for n,w,v in raw):
+            raise ValueError('Target summary identity verification failed')
+    finally:
+        conn.close()
+
+
+def _migration_publish(records, source_ids, mode, backup_path):
+    for record in records:
+        _migration_validate_target(record)
+    hook = globals().get('_migration_commit_hook')
+    if hook is None:
         try:
-            conn_sum = sqlite3.connect(CONVERSATION_SUMMARIES_DB, timeout=3.0)
-            c_sum = conn_sum.cursor()
-            c_sum.execute("SELECT * FROM conversation_summaries WHERE conversation_id = ?", (source_cid,))
-            row = c_sum.fetchone()
-            if row:
-                col_names = [d[0] for d in c_sum.description]
-                row_dict = dict(zip(col_names, row))
-                row_dict['conversation_id'] = new_cid
-                if target_account and (target_account == 'instance_2' or norm_account(target_account) == get_secondary_account()):
-                    row_dict['app_data_dir'] = 'antigravity-instance2'
-                cols = list(row_dict.keys())
-                placeholders = ", ".join(["?"] * len(cols))
-                insert_sql = f"INSERT OR REPLACE INTO conversation_summaries ({', '.join(cols)}) VALUES ({placeholders})"
-                c_sum.execute(insert_sql, list(row_dict.values()))
-                conn_sum.commit()
-            conn_sum.close()
-        except Exception:
-            pass
+            from migration_native_commit import commit_migration
+            hook = commit_migration
+        except ImportError as error:
+            raise RuntimeError('Migration needs the native-owner commit hook; sources were preserved') from error
+    for record in records:
+        account = record.get('target_account')
+        if account:
+            assigned = assign_conversation_account(record['target_id'],account,action='add')
+            if not isinstance(assigned,dict) or not assigned.get('success'):
+                raise RuntimeError('Target account assignment failed')
+    result = hook(records, list(source_ids), mode, backup_path)
+    if not isinstance(result, dict) or not result.get('success'):
+        raise RuntimeError((result or {}).get('error', 'Native migration commit failed') if isinstance(result, dict) else 'Native migration commit did not confirm success')
+    if mode == 'move' and set(result.get('sources_archived',[])) != set(source_ids):
+        raise RuntimeError('Native owner did not confirm archival of every source')
+    return result
 
-    # Update profile sync manifest
-    if target_account:
-        assign_conversation_account(new_cid, target_account, action='add')
 
+def create_safety_backup(conv_ids):
+    """Snapshot every input and the summary index before any destructive commit."""
+    ensure_dirs()
+    if not conv_ids:
+        raise ValueError('No conversations specified')
+    paths = [(cid, _migration_path(cid)) for cid in conv_ids]
+    if any(not os.path.isfile(path) for cid,path in paths):
+        raise FileNotFoundError('A source conversation is missing')
+    target = os.path.join(BACKUP_DIR, 'pre_migration_' + time.strftime('%Y%m%d_%H%M%S') + '_' + uuid.uuid4().hex)
+    os.mkdir(target)
+    for cid, source in paths:
+        _migration_snapshot(source, os.path.join(target,cid + '.db'))
+        brain = os.path.join(BRAIN_DIR,cid)
+        if os.path.exists(brain):
+            shutil.copytree(brain,os.path.join(target,'brain_' + cid))
+    _migration_snapshot(CONVERSATION_SUMMARIES_DB,os.path.join(target,'conversation_summaries.db'))
+    return target
+
+
+def clone_single_conversation(source_cid, new_cid=None, target_account=None, _defer_commit=False):
+    """Build and verify a new conversation, publishing only through its owner."""
+    ensure_dirs()
+    new_cid = new_cid or str(uuid.uuid4())
+    src_db, dst_db = _migration_path(source_cid), _migration_path(new_cid)
+    if not os.path.isfile(src_db):
+        raise FileNotFoundError(src_db)
+    dst_brain = os.path.join(BRAIN_DIR,new_cid)
+    if os.path.lexists(dst_db) or os.path.lexists(dst_brain):
+        raise FileExistsError('Destination conversation already exists')
+    _migration_snapshot(src_db,dst_db)
+    conn = sqlite3.connect(dst_db)
+    try:
+        info = _migration_inspect(conn,allow_embedded=True)
+        if info['cascade_id'] != source_cid:
+            raise ValueError('Source identity does not match its filename')
+        signature = _migration_signature(conn)
+        target_tid = str(uuid.uuid4())
+        context = _migration_context(source_cid,info['trajectory_id'],new_cid,target_tid)
+        context['preserve_embedded_trajectories'] = True
+        with conn:
+            _migration_rewrite_database(conn,context,new_cid,target_tid)
+        summary = _migration_summary(source_cid,new_cid,target_account,context,info['counts']['steps'])
+    finally:
+        conn.close()
+    brain = os.path.join(BRAIN_DIR,source_cid)
+    if os.path.exists(brain):
+        # Copy literal transcript bytes; UUIDs in user content are not identities.
+        shutil.copytree(brain,dst_brain)
+    record = {'target_id':new_cid,'source_id':source_cid,'source_ids':[source_cid],
+              'trajectory_id':target_tid,'allows_embedded':True,'summary':summary,'expected_step_count':info['counts']['steps'],
+              'db_path':dst_db,'brain_path':dst_brain,'expected_counts':info['counts'],'target_account':target_account,
+              'source_signatures':{source_cid:signature},'offsets':{source_cid:{'step_offset':0,'gen_offset':0}}}
+    _migration_validate_target(record)
+    if _defer_commit:
+        return record
+    backup = create_safety_backup([source_cid])
+    _migration_publish([record],[source_cid],'copy',backup)
     return new_cid
 
-def merge_conversations(conv_ids, target_title="Merged Project Timeline", target_account=None):
-    """
-    Consolidate multiple selected conversation threads into a single master conversation.
-    """
-    if not conv_ids:
-        return None
 
-    primary_cid = conv_ids[0]
-    merged_cid = str(uuid.uuid4())
-    
-    clone_single_conversation(primary_cid, merged_cid, target_account=target_account)
-    dst_db = os.path.join(CONVERSATIONS_DIR, f"{merged_cid}.db")
-    
+def merge_conversations(conv_ids, target_title='Merged Project Timeline', target_account=None, _defer_commit=False):
+    """Append supported trajectories without losing overlapping row indices."""
+    if not conv_ids or len(set(conv_ids)) != len(conv_ids):
+        raise ValueError('Specify distinct source conversations')
+    # Every source is an immutable, WAL-aware snapshot before rebasing begins.
+    backup = create_safety_backup(conv_ids)
+    inputs = []
     try:
-        conn_dst = sqlite3.connect(dst_db)
-        c_dst = conn_dst.cursor()
+        for cid in conv_ids:
+            conn = _migration_open_readonly(os.path.join(backup,cid + '.db'))
+            try:
+                info = _migration_inspect(conn)
+                if info['cascade_id'] != cid:
+                    raise ValueError('Source identity does not match its filename')
+                info.update(cid=cid,conn=conn,signature=_migration_signature(conn))
+                inputs.append(info)
+            except Exception:
+                conn.close()
+                raise
+        known = {'trajectory_meta','steps','gen_metadata','executor_metadata','parent_references','trajectory_metadata_blob','battle_mode_infos'}
+        for item in inputs:
+            for table,count in item['counts'].items():
+                if table not in known and count:
+                    raise ValueError('Cannot merge populated unsupported table: ' + table)
+            if item['tables'] != inputs[0]['tables']:
+                raise ValueError('Cannot merge conversations with different SQLite schemas')
+        target_cid,target_tid = str(uuid.uuid4()),str(uuid.uuid4())
+        dst_db = _migration_path(target_cid)
+        dst_brain = os.path.join(BRAIN_DIR,target_cid)
+        if os.path.lexists(dst_brain):
+            raise FileExistsError(dst_brain)
+        _migration_snapshot(os.path.join(backup,conv_ids[0] + '.db'),dst_db)
+        id_map,reference_contexts,offsets = {},{},{}
+        trajectory_map,conversation_map = {},{}
+        trajectory_contexts,conversation_contexts = {},{}
+        next_indices = {table:0 for table in ('steps','gen_metadata','executor_metadata','parent_references','battle_mode_infos')}
+        for item in inputs:
+            item['offsets'] = dict(next_indices)
+            ref = {'step_offset':next_indices['steps'],'gen_offset':next_indices['gen_metadata']}
+            offsets[item['cid']] = dict(ref)
+            id_map[item['cid']] = target_cid
+            id_map[item['trajectory_id']] = target_tid
+            reference_contexts[item['cid']] = ref
+            # Two input files sharing a trajectory ID cannot express distinct
+            # index spaces in references; guessing would silently corrupt links.
+            if item['trajectory_id'] in trajectory_contexts:
+                raise ValueError('Cannot merge ambiguous duplicate trajectory identities')
+            reference_contexts[item['trajectory_id']] = ref
+            trajectory_map[item['trajectory_id']] = target_tid
+            conversation_map[item['cid']] = target_cid
+            trajectory_contexts[item['trajectory_id']] = ref
+            conversation_contexts[item['cid']] = ref
+            for table in next_indices:
+                if table in item['tables']:
+                    maximum = item['conn'].execute('SELECT MAX(idx) FROM ' + table).fetchone()[0]
+                    if maximum is not None:
+                        if not isinstance(maximum,int) or maximum < 0:
+                            raise ValueError('Unsupported metadata index')
+                        next_indices[table] += maximum + 1
+        shared = {'id_map':id_map,'reference_contexts':reference_contexts,'execution_ids':{},'target_tid':target_tid,
+                  'trajectory_map':trajectory_map,'conversation_map':conversation_map,
+                  'trajectory_contexts':trajectory_contexts,'conversation_contexts':conversation_contexts}
+        conn = sqlite3.connect(dst_db)
+        try:
+            with conn:
+                for item in inputs:
+                    context = dict(shared,**offsets[item['cid']])
+                    if item is inputs[0]:
+                        _migration_rewrite_database(conn,context,target_cid,target_tid)
+                        continue
+                    # Rewrite the secondary snapshot in memory, never its files.
+                    scratch = sqlite3.connect(':memory:')
+                    try:
+                        item['conn'].backup(scratch)
+                        _migration_rewrite_database(scratch,context,target_cid,target_tid)
+                        for table in ('steps','gen_metadata','executor_metadata','parent_references','battle_mode_infos'):
+                            if table not in item['tables']:
+                                continue
+                            cols = item['tables'][table]
+                            index_pos = cols.index('idx')
+                            sql = 'INSERT INTO ' + table + ' (' + ','.join(_migration_sql_name(c) for c in cols) + ') VALUES (' + ','.join('?' for c in cols) + ')'
+                            for row in scratch.execute('SELECT * FROM ' + table).fetchall():
+                                row = list(row)
+                                row[index_pos] += item['offsets'][table]
+                                conn.execute(sql,row)
+                    finally:
+                        scratch.close()
+            counts = dict(inputs[0]['counts'])
+            for table in ('steps','gen_metadata','executor_metadata','parent_references','battle_mode_infos'):
+                if table in counts:
+                    counts[table] = sum(item['counts'][table] for item in inputs)
+            if _migration_inspect(conn)['counts'] != counts:
+                raise ValueError('Merge did not preserve every source row')
+        finally:
+            conn.close()
+        os.mkdir(dst_brain)
+        for item in inputs:
+            cid = item['cid']
+            brain = os.path.join(backup,'brain_' + cid)
+            if item is inputs[0] and os.path.isdir(brain):
+                shutil.copytree(brain,dst_brain,dirs_exist_ok=True)
+            archive = os.path.join(dst_brain,'merged_sources',cid)
+            os.makedirs(archive,exist_ok=False)
+            # Preserve each source's original singleton metadata and brain too.
+            shutil.copy2(os.path.join(backup,cid + '.db'),os.path.join(archive,'trajectory.db'))
+            if os.path.isdir(brain):
+                shutil.copytree(brain,os.path.join(archive,'brain'))
+        context = dict(shared,**offsets[conv_ids[0]])
+        summary = _migration_summary(conv_ids[0],target_cid,target_account,context,counts['steps'],target_title)
+        if len(conv_ids) > 1:
+            latest_context = dict(shared,**offsets[conv_ids[-1]])
+            latest = _migration_summary(conv_ids[-1],target_cid,target_account,latest_context,counts['steps'],target_title)
+            summary = _migration_merge_latest_summary(summary,latest)
+        record = {'target_id':target_cid,'source_ids':list(conv_ids),'trajectory_id':target_tid,
+                  'summary':summary,'expected_step_count':counts['steps'],'db_path':dst_db,'brain_path':dst_brain,
+                  'expected_counts':counts,'offsets':offsets,'target_account':target_account,
+                  'source_signatures':{item['cid']:item['signature'] for item in inputs}}
+        _migration_validate_target(record)
+        if _defer_commit:
+            return record
+        _migration_publish([record],conv_ids,'copy',backup)
+        return target_cid
+    finally:
+        for item in inputs:
+            item['conn'].close()
 
-        for sec_cid in conv_ids[1:]:
-            sec_db = os.path.join(CONVERSATIONS_DIR, f"{sec_cid}.db")
-            if not os.path.exists(sec_db):
-                continue
-            conn_sec = sqlite3.connect(sec_db)
-            c_sec = conn_sec.cursor()
-            
-            c_sec.execute("SELECT * FROM steps")
-            sec_steps = c_sec.fetchall()
-            col_names = [d[0] for d in c_sec.description]
-            placeholders = ", ".join(["?"] * len(col_names))
-            insert_query = f"INSERT INTO steps ({', '.join(col_names)}) VALUES ({placeholders})"
-            
-            for row in sec_steps:
-                try:
-                    c_dst.execute(insert_query, row)
-                except Exception:
-                    pass
-            conn_sec.close()
-
-        conn_dst.commit()
-        conn_dst.close()
-    except Exception:
-        pass
-
-    return merged_cid
 
 def setup_dual_sync(account_a, account_b, sync_pairs):
     """Register dual-sync pair mappings in sync_manifest.json."""
@@ -1518,60 +1992,60 @@ def setup_dual_sync(account_a, account_b, sync_pairs):
         json.dump(manifest, f, indent=2, ensure_ascii=False)
 
 def migrate_conversations(conv_ids, source_account, target_account, mode='copy', structure='separate', dual_sync=False, project_id=None):
+    """Publish a fully verified batch. Move archives sources through their owner.
+
+    Source database/brain files are retained for recovery and parent references;
+    no SQLite writer files are ever removed by a migration.
     """
-    Main migration controller:
-    - mode: 'copy' (keep in source) or 'move' (remove from source)
-    - structure: 'separate' (distinct threads) or 'merge' (single consolidated project)
-    - dual_sync: boolean
-    """
-    if not conv_ids:
-        return {'success': False, 'error': 'No conversations specified'}
+    backup_path = None
+    records = []
+    try:
+        if not conv_ids or len(set(conv_ids)) != len(conv_ids):
+            raise ValueError('Specify distinct source conversations')
+        if mode not in ('copy','move') or structure not in ('separate','merge'):
+            raise ValueError('Unsupported migration mode or structure')
+        # A missing source, failed snapshot, or brain copy aborts the whole batch.
+        backup_path = create_safety_backup(conv_ids)
+        if structure == 'merge':
+            record = merge_conversations(conv_ids,target_account=target_account,_defer_commit=True)
+            if not isinstance(record,dict):
+                raise ValueError('Merge did not produce a verified target')
+            records.append(record)
+        else:
+            for cid in conv_ids:
+                record = clone_single_conversation(cid,target_account=target_account,_defer_commit=True)
+                if not isinstance(record,dict):
+                    raise ValueError('Clone did not produce a verified target')
+                records.append(record)
+        # Fail before asking the native owner to publish/archive anything if any
+        # destination, source count, summary, or requested manifest update fails.
+        for record in records:
+            _migration_validate_target(record)
+        if dual_sync:
+            pairs = [{'source':r.get('source_id',r['source_ids']),'target':r['target_id']} for r in records]
+            setup_dual_sync(source_account,target_account,pairs)
+        if project_id:
+            assigned = sync_project_to_account(project_id,target_account,include_conversations=False)
+            if not isinstance(assigned,dict) or not assigned.get('success'):
+                raise RuntimeError('Project assignment failed')
+        committed = _migration_publish(records,conv_ids,mode,backup_path)
+        results = [dict({'source_ids':r['source_ids'],'target_id':r['target_id'],
+                         'type':'merged' if structure == 'merge' else 'cloned',
+                         'expected_step_count':r['expected_step_count']},
+                        **({'source_id':r['source_id']} if 'source_id' in r else {})) for r in records]
+        return {'success':True,'mode':mode,'structure':structure,'migrated_count':len(records),
+                'results':results,'backup_path':backup_path,
+                'source_action':'archived' if mode == 'move' else 'retained',
+                'sources_archived':committed.get('sources_archived',[])}
+    except Exception as error:
+        # A native publication error can leave recoverable unregistered targets.
+        # Never clean up a target after the owner might have opened it, or remove
+        # a source. Report the partial artifacts explicitly for recovery.
+        return {'success':False,'mode':mode,'structure':structure,'migrated_count':0,
+                'error':str(error),'backup_path':backup_path,
+                'created_targets':[r['target_id'] for r in records],
+                'source_action':'files_retained','archival_status':'unconfirmed'}
 
-    backup_path = create_safety_backup(conv_ids)
-    results = []
-
-    if structure == 'merge':
-        merged_id = merge_conversations(conv_ids, target_account=target_account)
-        if merged_id:
-            results.append({
-                'source_ids': conv_ids,
-                'target_id': merged_id,
-                'type': 'merged'
-            })
-            if mode == 'move':
-                for cid in conv_ids:
-                    delete_conversation(cid)
-            if dual_sync:
-                setup_dual_sync(source_account, target_account, [{'source': conv_ids, 'target': merged_id}])
-    else:
-        sync_pairs = []
-        for cid in conv_ids:
-            new_cid = clone_single_conversation(cid, target_account=target_account)
-            if new_cid:
-                results.append({
-                    'source_id': cid,
-                    'target_id': new_cid,
-                    'type': 'cloned'
-                })
-                sync_pairs.append({'source': cid, 'target': new_cid})
-                if mode == 'move':
-                    delete_conversation(cid)
-
-        if dual_sync and sync_pairs:
-            setup_dual_sync(source_account, target_account, sync_pairs)
-
-    # If associated project given, also assign project to target_account
-    if project_id:
-        sync_project_to_account(project_id, target_account, include_conversations=False)
-
-    return {
-        'success': True,
-        'mode': mode,
-        'structure': structure,
-        'migrated_count': len(results),
-        'results': results,
-        'backup_path': backup_path
-    }
 
 def delete_conversation(conv_id):
     """Safely delete a conversation database and its brain folder."""
@@ -1592,7 +2066,7 @@ def delete_conversation(conv_id):
     # Remove from conversation_summaries.db
     if os.path.exists(CONVERSATION_SUMMARIES_DB):
         try:
-            conn = sqlite3.connect(CONVERSATION_SUMMARIES_DB, timeout=3.0)
+            conn = sqlite3.connect(CONVERSATION_SUMMARIES_DB, timeout=30.0)
             cur = conn.cursor()
             cur.execute("DELETE FROM conversation_summaries WHERE conversation_id = ?", (conv_id,))
             conn.commit()
@@ -1604,7 +2078,7 @@ def is_account2(email):
     if not email:
         return False
     norm = str(email).lower().strip()
-    return norm in ('instance_2', 'secondary_account', 'bombhub.apk@gmail.com') or 'bombhub' in norm or 'account2' in norm
+    return norm in ('instance_2', 'secondary_account', 'user2@example.com') or 'account2' in norm or 'secondary' in norm
 
 if __name__ == '__main__':
     import argparse

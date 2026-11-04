@@ -218,6 +218,23 @@ def extract_token_email(token_data):
         pass
     return None
 
+def check_token_has_aicode(token_data):
+    """Checks if token data contains Google Cloud aicode scopes or valid OAuth tokens."""
+    if not token_data:
+        return False
+    try:
+        if isinstance(token_data, dict):
+            s = json.dumps(token_data)
+        else:
+            s = str(token_data)
+        if 'aicode' in s:
+            return True
+        if 'access_token' in s or 'refresh_token' in s:
+            return True
+    except Exception:
+        pass
+    return False
+
 def ensure_fresh_token(token_data, account_email=None, force_refresh=False):
     """
     Checks if an OAuth token is expired or close to expiring (< 5 mins).
@@ -253,21 +270,7 @@ def ensure_fresh_token(token_data, account_email=None, force_refresh=False):
 
     needs_refresh = bool(force_refresh)
     if not needs_refresh:
-        # Check id_token expiration if available
-        id_tok = parsed.get('id_token')
-        if id_tok and isinstance(id_tok, str) and '.' in id_tok:
-            try:
-                parts = id_tok.split('.')
-                if len(parts) >= 2:
-                    p = parts[1] + '=' * (-len(parts[1]) % 4)
-                    claims = json.loads(base64.urlsafe_b64decode(p).decode('utf-8', errors='ignore'))
-                    jwt_exp = claims.get('exp')
-                    if jwt_exp and (jwt_exp - time.time()) < 300:
-                        needs_refresh = True
-            except Exception:
-                pass
-
-        if not needs_refresh and expiry_str:
+        if expiry_str:
             try:
                 import datetime
                 clean_exp = expiry_str.replace('Z', '+00:00')
@@ -291,7 +294,7 @@ def ensure_fresh_token(token_data, account_email=None, force_refresh=False):
                     needs_refresh = True
             except Exception:
                 needs_refresh = True
-        elif not needs_refresh and not expiry_str:
+        else:
             needs_refresh = True
 
     if needs_refresh:
@@ -311,13 +314,9 @@ def ensure_fresh_token(token_data, account_email=None, force_refresh=False):
                     exp_sec = tok_data.get('expires_in', 3600)
                     now_utc = datetime.datetime.now(datetime.timezone.utc)
                     new_exp = now_utc + datetime.timedelta(seconds=exp_sec)
-                    t_obj['expiry'] = new_exp.strftime('%Y-%m-%dT%H:%M:%S.000Z')
+                    t_obj['expiry'] = new_exp.isoformat()
                     if 'id_token' in tok_data:
                         parsed['id_token'] = tok_data['id_token']
-                    if 'scope' in tok_data:
-                        t_obj['scope'] = tok_data['scope']
-                    if 'auth_method' not in parsed:
-                        parsed['auth_method'] = 'consumer'
                     if 'token' in parsed:
                         parsed['token'] = t_obj
                     else:
@@ -344,57 +343,6 @@ def ensure_fresh_token(token_data, account_email=None, force_refresh=False):
             pass
 
     return json.dumps(parsed, ensure_ascii=False) if (is_json_str or isinstance(token_data, str)) else parsed
-
-def check_token_has_aicode(token_data):
-    """
-    Checks if a token has the necessary https://www.googleapis.com/auth/aicode scope
-    required by Antigravity code assistance.
-    """
-    if not token_data:
-        return False
-    parsed = None
-    if isinstance(token_data, dict):
-        parsed = token_data
-    elif isinstance(token_data, str):
-        tok_s = token_data.strip()
-        if tok_s.startswith('{'):
-            try:
-                parsed = json.loads(tok_s)
-            except Exception:
-                pass
-    if not parsed:
-        return False
-
-    t_obj = parsed.get('token', parsed)
-    stored_scope = t_obj.get('scope', '') or parsed.get('scope', '')
-    if stored_scope:
-        return ('auth/aicode' in stored_scope) or ('https://www.googleapis.com/auth/aicode' in stored_scope)
-
-    # Query tokeninfo with access_token to inspect granted scopes
-    acc_tok = t_obj.get('access_token')
-    if not acc_tok:
-        return False
-    try:
-        req = urllib.request.Request(f'https://oauth2.googleapis.com/tokeninfo?access_token={acc_tok}')
-        with urllib.request.urlopen(req, timeout=4.0) as resp:
-            info = json.loads(resp.read().decode('utf-8'))
-            scope_str = info.get('scope', '')
-            if scope_str:
-                t_obj['scope'] = scope_str
-                em = extract_token_email(parsed)
-                if em:
-                    safe_acc = "".join(c if c.isalnum() or c in ('@', '.', '_', '-') else '_' for c in em)
-                    tf = os.path.expanduser(f"~/.gemini/accounts/{safe_acc}.token")
-                    try:
-                        with open(tf, 'w', encoding='utf-8') as f:
-                            json.dump(parsed, f, indent=2, ensure_ascii=False)
-                    except Exception:
-                        pass
-                return ('auth/aicode' in scope_str) or ('https://www.googleapis.com/auth/aicode' in scope_str)
-    except Exception:
-        pass
-
-    return True
 
 def discover_language_server(instance_id=None):
     """
@@ -553,6 +501,8 @@ def fetch_quota_from_language_server(instance_id=None):
         gemini_5h_bucket = None
         p3_w_bucket = None
         p3_5h_bucket = None
+        argon_w_bucket = None
+        argon_5h_bucket = None
 
         for g in groups:
             for b in g.get('buckets', []):
@@ -565,6 +515,11 @@ def fetch_quota_from_language_server(instance_id=None):
                     p3_w_bucket = b
                 elif bid == '3p-5h':
                     p3_5h_bucket = b
+                elif 'argon' in bid.lower() or 'argon' in g.get('displayName', '').lower():
+                    if 'weekly' in bid.lower() or 'wtu' in bid.lower():
+                        argon_w_bucket = b
+                    elif '5h' in bid.lower():
+                        argon_5h_bucket = b
 
         def _get_rem(b):
             if not b:
@@ -581,16 +536,22 @@ def fetch_quota_from_language_server(instance_id=None):
         g5_rem = _get_rem(gemini_5h_bucket)
         p3w_rem = _get_rem(p3_w_bucket)
         p35_rem = _get_rem(p3_5h_bucket)
+        argon_w_rem = _get_rem(argon_w_bucket) if argon_w_bucket else 0.0
+        argon_5h_rem = _get_rem(argon_5h_bucket) if argon_5h_bucket else argon_w_rem
 
         gw_reset = gemini_w_bucket.get('resetTime') if gemini_w_bucket else None
         g5_reset = gemini_5h_bucket.get('resetTime') if gemini_5h_bucket else None
         p3w_reset = p3_w_bucket.get('resetTime') if p3_w_bucket else None
         p35_reset = p3_5h_bucket.get('resetTime') if p3_5h_bucket else None
+        argon_w_reset = argon_w_bucket.get('resetTime') if argon_w_bucket else None
+        argon_5h_reset = argon_5h_bucket.get('resetTime') if argon_5h_bucket else argon_w_reset
 
         gw_cd, gw_lr, gw_sec = format_countdown(gw_reset)
         g5_cd, g5_lr, g5_sec = format_countdown(g5_reset)
         p3w_cd, p3w_lr, p3w_sec = format_countdown(p3w_reset)
         p35_cd, p35_lr, p35_sec = format_countdown(p35_reset)
+        argon_w_cd, argon_w_lr, argon_w_sec = format_countdown(argon_w_reset)
+        argon_5h_cd, argon_5h_lr, argon_5h_sec = format_countdown(argon_5h_reset)
 
         models = (models_data or {}).get('response', {}).get('models', {})
         pools_map = {}
@@ -602,7 +563,9 @@ def fetch_quota_from_language_server(instance_id=None):
             reset_time = quota.get('resetTime')
             disp = m_info.get('displayName', m_id)
 
-            if 'claude' in m_id.lower() or 'claude' in str(disp).lower():
+            if 'argon' in m_id.lower() or 'argon' in str(disp).lower():
+                cat = 'Argon'
+            elif 'claude' in m_id.lower() or 'claude' in str(disp).lower():
                 cat = 'Claude Sonnet 4.6'
             elif 'gpt' in m_id.lower():
                 cat = 'GPT-OSS 120B'
@@ -620,20 +583,38 @@ def fetch_quota_from_language_server(instance_id=None):
                 if reset_time:
                     pools_map[cat]['reset_time'] = reset_time
 
-        ordered = ['Gemini 3.8 Flash High', 'Gemini 3.1 Pro', 'Claude Sonnet 4.6', 'GPT-OSS 120B']
+        ordered = ['Gemini 3.8 Flash High', 'Gemini 3.1 Pro', 'Argon', 'Claude Sonnet 4.6', 'GPT-OSS 120B']
         pools = []
         for c in ordered:
             is_claude_gpt = ('Claude' in c or 'GPT' in c)
-            base_rem = p35_rem if is_claude_gpt else g5_rem
-            base_reset = p35_reset if is_claude_gpt else g5_reset
-            base_cd = p35_cd if is_claude_gpt else g5_cd
-            base_lr = p35_lr if is_claude_gpt else g5_lr
-            base_sec = p35_sec if is_claude_gpt else g5_sec
+            is_argon = ('Argon' in c)
 
-            w_rem = p3w_rem if is_claude_gpt else gw_rem
-            w_cd = p3w_cd if is_claude_gpt else gw_cd
+            if is_claude_gpt:
+                base_rem = p35_rem
+                base_reset = p35_reset
+                base_cd = p35_cd
+                base_lr = p35_lr
+                base_sec = p35_sec
+                w_rem = p3w_rem
+                w_cd = p3w_cd
+            elif is_argon:
+                base_rem = argon_5h_rem
+                base_reset = argon_5h_reset
+                base_cd = argon_5h_cd
+                base_lr = argon_5h_lr
+                base_sec = argon_5h_sec
+                w_rem = argon_w_rem
+                w_cd = argon_w_cd
+            else:
+                base_rem = g5_rem
+                base_reset = g5_reset
+                base_cd = g5_cd
+                base_lr = g5_lr
+                base_sec = g5_sec
+                w_rem = gw_rem
+                w_cd = gw_cd
 
-            if c in pools_map:
+            if c in pools_map and not is_argon:
                 p = pools_map[c]
                 if p['rem'] < base_rem:
                     base_rem = p['rem']
@@ -791,6 +772,7 @@ def fetch_quota_and_tier(token_str=None, force_refresh=False):
                         'pools': [
                             {'name': 'Gemini 3.8 Flash High', 'used_pct': round(100.0 - rem, 1), 'remaining_pct': rem, 'resets_in': 'Ready', 'reset_time': 'Ready', 'reset_secs': 0, 'weekly_rem': w_rem, 'weekly_pct': round(100.0 - w_rem, 1), 'weekly_resets': w_res},
                             {'name': 'Gemini 3.1 Pro', 'used_pct': round(100.0 - rem, 1), 'remaining_pct': rem, 'resets_in': 'Ready', 'reset_time': 'Ready', 'reset_secs': 0, 'weekly_rem': w_rem, 'weekly_pct': round(100.0 - w_rem, 1), 'weekly_resets': w_res},
+                            {'name': 'Argon', 'used_pct': 100.0, 'remaining_pct': 0.0, 'resets_in': '4 d', 'reset_time': 'Ready', 'reset_secs': 0, 'weekly_rem': 0.0, 'weekly_pct': 100.0, 'weekly_resets': '4 d'},
                             {'name': 'Claude Sonnet 4.6', 'used_pct': 0.0, 'remaining_pct': 100.0, 'resets_in': 'Ready', 'reset_time': 'Ready', 'reset_secs': 0, 'weekly_rem': 100.0, 'weekly_pct': 0.0, 'weekly_resets': 'Ready'},
                             {'name': 'GPT-OSS 120B', 'used_pct': 0.0, 'remaining_pct': 100.0, 'resets_in': 'Ready', 'reset_time': 'Ready', 'reset_secs': 0, 'weekly_rem': 100.0, 'weekly_pct': 0.0, 'weekly_resets': 'Ready'}
                         ]
@@ -992,6 +974,8 @@ def fetch_quota_and_tier(token_str=None, force_refresh=False):
         gemini_5h_bucket = None
         p3_w_bucket = None
         p3_5h_bucket = None
+        argon_w_bucket = None
+        argon_5h_bucket = None
 
         if summary_data and 'groups' in summary_data:
             for g in summary_data.get('groups', []):
@@ -1005,6 +989,11 @@ def fetch_quota_and_tier(token_str=None, force_refresh=False):
                         p3_w_bucket = b
                     elif bid == '3p-5h':
                         p3_5h_bucket = b
+                    elif 'argon' in bid.lower() or 'argon' in g.get('displayName', '').lower():
+                        if 'weekly' in bid.lower() or 'wtu' in bid.lower():
+                            argon_w_bucket = b
+                        elif '5h' in bid.lower():
+                            argon_5h_bucket = b
 
         def _get_rem(b):
             if not b:
@@ -1021,16 +1010,22 @@ def fetch_quota_and_tier(token_str=None, force_refresh=False):
         g5_rem = _get_rem(gemini_5h_bucket)
         p3w_rem = _get_rem(p3_w_bucket)
         p35_rem = _get_rem(p3_5h_bucket)
+        argon_w_rem = _get_rem(argon_w_bucket) if argon_w_bucket else 0.0
+        argon_5h_rem = _get_rem(argon_5h_bucket) if argon_5h_bucket else argon_w_rem
 
         gw_reset = gemini_w_bucket.get('resetTime') if gemini_w_bucket else None
         g5_reset = gemini_5h_bucket.get('resetTime') if gemini_5h_bucket else None
         p3w_reset = p3_w_bucket.get('resetTime') if p3_w_bucket else None
         p35_reset = p3_5h_bucket.get('resetTime') if p3_5h_bucket else None
+        argon_w_reset = argon_w_bucket.get('resetTime') if argon_w_bucket else None
+        argon_5h_reset = argon_5h_bucket.get('resetTime') if argon_5h_bucket else argon_w_reset
 
         gw_cd, gw_lr, gw_sec = format_countdown(gw_reset)
         g5_cd, g5_lr, g5_sec = format_countdown(g5_reset)
         p3w_cd, p3w_lr, p3w_sec = format_countdown(p3w_reset)
         p35_cd, p35_lr, p35_sec = format_countdown(p35_reset)
+        argon_w_cd, argon_w_lr, argon_w_sec = format_countdown(argon_w_reset)
+        argon_5h_cd, argon_5h_lr, argon_5h_sec = format_countdown(argon_5h_reset)
 
         # Model parsing from models_data
         models = (models_data or {}).get('models', {})
@@ -1043,7 +1038,9 @@ def fetch_quota_and_tier(token_str=None, force_refresh=False):
             reset_time = quota.get('resetTime')
             disp = m_info.get('displayName', m_id)
 
-            if 'claude' in m_id.lower() or 'claude' in disp.lower():
+            if 'argon' in m_id.lower() or 'argon' in disp.lower():
+                cat = 'Argon'
+            elif 'claude' in m_id.lower() or 'claude' in disp.lower():
                 cat = 'Claude Sonnet 4.6'
             elif 'gpt' in m_id.lower():
                 cat = 'GPT-OSS 120B'
@@ -1061,21 +1058,39 @@ def fetch_quota_and_tier(token_str=None, force_refresh=False):
                 if reset_time:
                     pools_map[cat]['reset_time'] = reset_time
 
-        ordered = ['Gemini 3.8 Flash High', 'Gemini 3.1 Pro', 'Claude Sonnet 4.6', 'GPT-OSS 120B']
+        ordered = ['Gemini 3.8 Flash High', 'Gemini 3.1 Pro', 'Argon', 'Claude Sonnet 4.6', 'GPT-OSS 120B']
         pools = []
         for c in ordered:
             is_claude_gpt = ('Claude' in c or 'GPT' in c)
-            base_rem = p35_rem if is_claude_gpt else g5_rem
-            base_reset = p35_reset if is_claude_gpt else g5_reset
-            base_cd = p35_cd if is_claude_gpt else g5_cd
-            base_lr = p35_lr if is_claude_gpt else g5_lr
-            base_sec = p35_sec if is_claude_gpt else g5_sec
+            is_argon = ('Argon' in c)
 
-            w_rem = p3w_rem if is_claude_gpt else gw_rem
-            w_cd = p3w_cd if is_claude_gpt else gw_cd
+            if is_claude_gpt:
+                base_rem = p35_rem
+                base_reset = p35_reset
+                base_cd = p35_cd
+                base_lr = p35_lr
+                base_sec = p35_sec
+                w_rem = p3w_rem
+                w_cd = p3w_cd
+            elif is_argon:
+                base_rem = argon_5h_rem
+                base_reset = argon_5h_reset
+                base_cd = argon_5h_cd
+                base_lr = argon_5h_lr
+                base_sec = argon_5h_sec
+                w_rem = argon_w_rem
+                w_cd = argon_w_cd
+            else:
+                base_rem = g5_rem
+                base_reset = g5_reset
+                base_cd = g5_cd
+                base_lr = g5_lr
+                base_sec = g5_sec
+                w_rem = gw_rem
+                w_cd = gw_cd
 
             # If model-specific data exists from models_data
-            if c in pools_map:
+            if c in pools_map and not is_argon:
                 p = pools_map[c]
                 if p['rem'] < base_rem:
                     base_rem = p['rem']
@@ -1147,9 +1162,9 @@ def fetch_quota_and_tier(token_str=None, force_refresh=False):
     except Exception:
         return dict(_QUOTA_CACHE[cache_key]['data']) if cache_key in _QUOTA_CACHE else None
 
-def fetch_quota():
+def fetch_quota(force_refresh=False):
     """Compatibility wrapper for Antigravity Quota Monitor."""
-    data = fetch_quota_and_tier()
+    data = fetch_quota_and_tier(force_refresh=force_refresh)
     if not data:
         return None
     session = data.get('session') or {}

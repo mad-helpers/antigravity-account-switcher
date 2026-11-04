@@ -56,7 +56,7 @@ Example JSON structure:
 {
   "success": true,
   "active_account": {
-    "email": "nabistudii0@gmail.com",
+    "email": "developer@example.com",
     "tier": "Google AI Pro",
     "session": {
       "used_pct": 10.8,
@@ -77,7 +77,7 @@ Example JSON structure:
       }
     ]
   },
-  "current_email": "nabistudii0@gmail.com",
+  "current_email": "developer@example.com",
   "saved_accounts": { ... },
   "projects": [ ... ],
   "instances": { "instance_2": false, "instance_3": false }
@@ -91,11 +91,11 @@ Example JSON structure:
 ### Switching Active Account
 When an account exhausts its prompt quota or when working on an account-specific workspace:
 ```bash
-agy-switch --switch bombhub.apk@gmail.com
+agy-switch --switch user2@example.com
 ```
 To update the OS Credential Manager without restarting the editor window:
 ```bash
-agy-switch --switch bombhub.apk@gmail.com --no-restart
+agy-switch --switch user2@example.com --no-restart
 ```
 
 ### Saving Active Session to Manifest
@@ -114,11 +114,11 @@ agy-switch --logout
 
 You can bind any project or directory to a designated quota account. Subsequent language server prompts in that project will consume quota from that designated account:
 ```bash
-agy-switch --set-project-quota "c:\Users\gerap\Desktop\agent-helper\gravity suitch accont" bombhub.apk@gmail.com
+agy-switch --set-project-quota "/path/to/my-project" user2@example.com
 ```
 Accepts:
 - Exact Project ID (e.g. `38a862ea-ade2-428a-b094-ff969a0e51c1`)
-- Project folder name (e.g. `gravity suitch accont`, `nabi perfume SEO`)
+- Project folder name (e.g. `my-project`)
 - Absolute or relative directory path
 
 ---
@@ -126,7 +126,7 @@ Accepts:
 ## 5. Model Context Protocol (MCP) Server Integration
 
 The suite includes a zero-dependency stdio MCP server located at:
-`C:\Users\gerap\Desktop\agent-helper\antigravity-account-switcher\mcp_server.py`
+`%USERPROFILE%\.gemini\antigravity\bin\mcp_server.py`
 
 ### MCP Tools:
 1. `get_quota_status(account?: string, include_all?: boolean)`:
@@ -147,7 +147,7 @@ The suite includes a zero-dependency stdio MCP server located at:
     "antigravity-account-suite": {
       "command": "python",
       "args": [
-        "C:\\Users\\gerap\\Desktop\\agent-helper\\antigravity-account-switcher\\mcp_server.py"
+        "%USERPROFILE%\\.gemini\\antigravity\\bin\\mcp_server.py"
       ],
       "env": {
         "PYTHONIOENCODING": "utf-8"

@@ -86,7 +86,7 @@ TOOLS_DEFINITIONS = [
             "properties": {
                 "account": {
                     "type": "string",
-                    "description": "Specific account email or instance alias (e.g. 'instance_2', 'bombhub.apk@gmail.com') to query (optional; defaults to the currently active account)"
+                    "description": "Specific account email or instance alias (e.g. 'instance_2', 'user2@example.com') to query (optional; defaults to the currently active account)"
                 },
                 "include_all": {
                     "type": "boolean",
@@ -517,8 +517,8 @@ def run_self_test():
         "params": {
             "name": "set_project_quota",
             "arguments": {
-                "project": "gravity suitch accont",
-                "account": "bombhub.apk@gmail.com"
+                "project": "sample-project",
+                "account": "user2@example.com"
             }
         }
     })

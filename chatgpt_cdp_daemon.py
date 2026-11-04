@@ -59,25 +59,89 @@ def load_injector_script():
         logger.error(f"Failed to read injector script: {e}")
         return ""
 
+_codex_exe_cache = (None, 0)
+
+def expected_codex_executable():
+    global _codex_exe_cache
+    cached, checked = _codex_exe_cache
+    now = time.monotonic()
+    if now - checked < 60:
+        return cached
+    try:
+        import subprocess
+        output = subprocess.check_output(
+            ['powershell.exe', '-NoProfile', '-Command', "(Get-AppxPackage -Name 'OpenAI.Codex' | Select-Object -First 1).InstallLocation"],
+            timeout=5, creationflags=0x08000000, stderr=subprocess.DEVNULL)
+        root = output.decode('utf-8-sig').strip()
+        exe = Path(root) / 'app' / 'ChatGPT.exe'
+        cached = str(exe.resolve()) if root and exe.is_file() else None
+    except Exception:
+        cached = None
+    _codex_exe_cache = (cached, now)
+    return cached
+
+def windows_session_id(pid):
+    import ctypes
+    from ctypes import wintypes
+    result = wintypes.DWORD()
+    if not ctypes.windll.kernel32.ProcessIdToSessionId(int(pid), ctypes.byref(result)):
+        raise OSError('Session identity unavailable')
+    return result.value
+
+def codex_listener_matches(port, listeners, process_factory, current_user, current_session, session_of, expected_exe):
+    if not expected_exe:
+        return False
+    expected = str(Path(expected_exe).resolve()).casefold()
+    for connection in listeners:
+        try:
+            if connection.status != 'LISTEN' or not connection.pid:
+                continue
+            if connection.laddr.port != port or connection.laddr.ip != '127.0.0.1':
+                continue
+            process = process_factory(connection.pid)
+            if str(Path(process.exe()).resolve()).casefold() != expected:
+                continue
+            if process.username().casefold() != current_user.casefold():
+                continue
+            if session_of(connection.pid) != current_session:
+                continue
+            return True
+        except Exception:
+            continue
+    return False
+
+def is_owned_codex_port(port):
+    try:
+        import psutil
+        current = psutil.Process()
+        return codex_listener_matches(port, psutil.net_connections(kind='tcp'), psutil.Process,
+            current.username(), windows_session_id(current.pid), windows_session_id, expected_codex_executable())
+    except Exception:
+        return False
+
+def is_owned_codex_ws(url):
+    try:
+        import urllib.parse
+        parsed = urllib.parse.urlparse(url)
+        if parsed.scheme != 'ws' or parsed.hostname != '127.0.0.1':
+            return False
+        if parsed.username or parsed.password or not parsed.path.startswith('/devtools/page/'):
+            return False
+        return bool(parsed.port and is_owned_codex_port(parsed.port))
+    except Exception:
+        return False
+
 def get_open_targets(port):
     """Fetches list of debuggable targets from Chromium DevTools port with ultra-fast 127.0.0.1 priority."""
+    if not is_owned_codex_port(port):
+        return []
     # Fast path: 127.0.0.1 is local loopback and answers in 1-5ms
     url = f"http://127.0.0.1:{port}/json/list"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "ChatGPT-Enhanced-Daemon"})
         with urllib.request.urlopen(req, timeout=0.25) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-            if isinstance(data, list) and data:
-                return data
-    except Exception:
-        pass
-
-    try:
-        url = f"http://localhost:{port}/json/list"
-        req = urllib.request.Request(url, headers={"User-Agent": "ChatGPT-Enhanced-Daemon"})
-        with urllib.request.urlopen(req, timeout=0.25) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if isinstance(data, list) and data:
+            if isinstance(data, list) and data and is_owned_codex_port(port):
                 return data
     except Exception:
         pass
@@ -187,9 +251,13 @@ async def handle_target_ipc(ws, raw_msg):
 
 async def target_worker(t_id, ws_url):
     """Dedicated persistent worker for an active ChatGPT DevTools target."""
+    if not is_owned_codex_ws(ws_url):
+        return False
     logger.info(f"[CPE WORKER] Starting worker for target {t_id}")
     try:
         async with websockets.connect(ws_url, ping_interval=15, ping_timeout=10, close_timeout=3) as ws:
+            if not is_owned_codex_ws(ws_url):
+                return False
             logger.info(f"[CPE WORKER] Connected to target {t_id}")
             # Enable Runtime and Page domains
             await ws.send(json.dumps({"id": 1, "method": "Runtime.enable"}))
@@ -311,10 +379,14 @@ async def target_worker(t_id, ws_url):
 
 async def check_and_inject_target(ws_url, script, force=False):
     """Connects via WebSocket, binds IPC, and injects if needed."""
+    if not is_owned_codex_ws(ws_url):
+        return False
     if not websockets or not ws_url or not script:
         return False
     try:
         async with websockets.connect(ws_url, ping_interval=None, ping_timeout=5, close_timeout=2) as ws:
+            if not is_owned_codex_ws(ws_url):
+                return False
             # Bind native IPC & Page domain
             await ws.send(json.dumps({"id": 9, "method": "Runtime.enable"}))
             await ws.send(json.dumps({"id": 10, "method": "Page.enable"}))
