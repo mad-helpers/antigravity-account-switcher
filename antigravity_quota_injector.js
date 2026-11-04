@@ -1,4 +1,17 @@
 (() => {
+  const runtimeRevision = '20261104.17';
+  const runtimeSettings = JSON.stringify(window.__antigravity_user_settings || {});
+  const runtimeAccount = window.__antigravity_account || '';
+  // A routine quota refresh must preserve open panels, focus, and pending input.
+  if (window.__aqm_runtime_revision === runtimeRevision &&
+      window.__aqm_runtime_settings === runtimeSettings &&
+      window.__aqm_runtime_account === runtimeAccount &&
+      typeof window.__aqm_refresh_runtime === 'function' &&
+      document.getElementById('antigravity-account-pill')) {
+    window.__aqm_refresh_runtime();
+    return;
+  }
+  window.__aqm_runtime_revision = null;
   // Clean up old intervals and popover on reload
   const existingPop = document.getElementById('antigravity-usage-popover');
   if (existingPop) existingPop.remove();
@@ -6,6 +19,8 @@
   if (existingModal) existingModal.remove();
   const existingAccPill = document.getElementById('antigravity-account-pill');
   if (existingAccPill) existingAccPill.remove();
+  const existingUsagePill = document.getElementById('antigravity-usage-pill');
+  if (existingUsagePill) existingUsagePill.remove();
 
   if (window.__aqm_dom_interval) { clearInterval(window.__aqm_dom_interval); window.__aqm_dom_interval = null; }
   if (window.__aqm_task_interval) { clearInterval(window.__aqm_task_interval); window.__aqm_task_interval = null; }
@@ -18,13 +33,23 @@
     window.__aqm_timers.forEach(id => { clearInterval(id); clearTimeout(id); });
     window.__aqm_timers = [];
   }
+  if (window.__aqm_iso_observer) { window.__aqm_iso_observer.disconnect(); }
+  if (window.__aqm_iso_interval) { clearInterval(window.__aqm_iso_interval); }
+  if (window.__aqm_iso_timeout) { clearTimeout(window.__aqm_iso_timeout); }
+  if (window.__aqm_global_events) { window.__aqm_global_events.abort(); }
+  window.__aqm_global_events = new AbortController();
+  window.__aqm_rtl_listener_bound = false;
+  window.__aqm_click_bound = false;
+  function onGlobal(target, type, listener, options = {}) {
+    target.addEventListener(type, listener, { ...options, signal: window.__aqm_global_events.signal });
+  }
   function safeAppendToHead(el) {
     try {
       const target = document.head || document.documentElement || document.body;
       if (target) {
         target.appendChild(el);
       } else {
-        document.addEventListener('DOMContentLoaded', () => {
+        onGlobal(document, 'DOMContentLoaded', () => {
           (document.head || document.documentElement || document.body)?.appendChild(el);
         }, { once: true });
       }
@@ -107,17 +132,55 @@
     }
   });
 
-  // Custom user-imported fonts registry
+  const userSettings = (typeof window !== 'undefined' && window.__antigravity_user_settings) || {};
+
+  // Custom user-imported fonts registry (supporting remote URLs, system fonts, and local font files)
   let customImportedFonts = [];
   try {
-    const savedImported = localStorage.getItem('antigravity:custom_imported_fonts');
-    if (savedImported) customImportedFonts = JSON.parse(savedImported) || [];
-  } catch (e) {}
+    const fromSettings = Array.isArray(userSettings.customImportedFonts) ? userSettings.customImportedFonts : [];
+    let fromStorage = [];
+    try {
+      const savedImported = localStorage.getItem('antigravity:custom_imported_fonts');
+      if (savedImported) fromStorage = JSON.parse(savedImported) || [];
+    } catch (e) {}
+
+    const map = new Map();
+    [...fromStorage, ...fromSettings].forEach(f => {
+      if (!f || !f.id) return;
+      const key = f.id.toLowerCase();
+      const existing = map.get(key);
+      if (!existing || (!existing.data && f.data)) {
+        map.set(key, f);
+      }
+    });
+    customImportedFonts = Array.from(map.values());
+  } catch (e) {
+    customImportedFonts = [];
+  }
 
   function injectImportedFontStyles() {
-    customImportedFonts.forEach((f, idx) => {
-      if (f.url && f.url.trim()) {
-        const id = `aqm-custom-font-${idx}`;
+    customImportedFonts.forEach((f) => {
+      if (!f || !f.id) return;
+      if (f.data) {
+        const styleId = `aqm-cfont-data-${encodeURIComponent(f.id.replace(/\s+/g, '-'))}`;
+        let styleEl = document.getElementById(styleId);
+        if (!styleEl) {
+          styleEl = document.createElement('style');
+          styleEl.id = styleId;
+          const formatStr = f.format ? ` format('${f.format}')` : '';
+          styleEl.textContent = `@font-face { font-family: '${f.id}'; src: url('${f.data}')${formatStr}; font-display: swap; }`;
+          safeAppendToHead(styleEl);
+        }
+        try {
+          if (typeof FontFace !== 'undefined' && document.fonts) {
+            const fontFace = new FontFace(f.id, `url(${f.data})`);
+            fontFace.load().then(loadedFace => {
+              document.fonts.add(loadedFace);
+            }).catch(() => {});
+          }
+        } catch (e) {}
+      } else if (f.url && f.url.trim()) {
+        const id = `aqm-cfont-${encodeURIComponent(f.id.replace(/\s+/g, '-'))}`;
         if (!document.getElementById(id)) {
           const link = document.createElement('link');
           link.id = id;
@@ -186,9 +249,21 @@
         transform: translateY(-1px);
         box-shadow: 0 4px 16px -2px rgba(0, 0, 0, 0.4);
       }
-      .aqm-task-active {
-        box-shadow: 0 0 16px rgba(251, 191, 36, 0.65) !important;
-        border-color: rgba(251, 191, 36, 0.6) !important;
+      .aqm-task-active,
+      #antigravity-account-pill.aqm-consuming {
+        border-color: #fbbf24 !important;
+        box-shadow: 0 0 14px rgba(251, 191, 36, 0.85), inset 0 0 6px rgba(251, 191, 36, 0.4) !important;
+        animation: aqm-yellow-pulse 1.6s infinite ease-in-out !important;
+      }
+      @keyframes aqm-yellow-pulse {
+        0%, 100% {
+          box-shadow: 0 0 14px rgba(251, 191, 36, 0.85), inset 0 0 6px rgba(251, 191, 36, 0.4);
+          border-color: #fbbf24;
+        }
+        50% {
+          box-shadow: 0 0 6px rgba(251, 191, 36, 0.4), inset 0 0 2px rgba(251, 191, 36, 0.2);
+          border-color: #f59e0b;
+        }
       }
       .aqm-custom-scroll::-webkit-scrollbar {
         width: 4px;
@@ -476,252 +551,42 @@
   `;
 
   // 3. Bespoke Themes with Unique Font Pairings, Textures & Deep Aesthetics
+  // 3. Clean Neutral Theme for HUD & Popover
   const THEMES = {
-    cyber: {
-      id: 'cyber',
-      name: 'سایبر نئون',
-      desc: 'آبی الکتریک • فونت Space Grotesk & استعداد',
-      icon: '🔷',
-      fontFamily: "'Space Grotesk', 'Estedad', sans-serif",
-      fontEn: "'Space Grotesk', sans-serif",
-      fontFa: "'Estedad', sans-serif",
-      cardBg: 'radial-gradient(circle at 85% 15%, rgba(56, 189, 248, 0.14), transparent 55%), linear-gradient(155deg, rgba(9, 14, 28, 0.94) 0%, rgba(4, 7, 16, 0.98) 100%)',
-      cardBorder: 'rgba(56, 189, 248, 0.32)',
-      cardShadow: '0 32px 85px -15px rgba(0, 0, 0, 0.9), 0 0 35px rgba(56, 189, 248, 0.16), inset 0 1px 1px 0 rgba(255, 255, 255, 0.22)',
-      accent: '#38bdf8',
-      accentSecondary: '#818cf8',
-      accentGrad: 'linear-gradient(90deg, #00f0ff 0%, #38bdf8 45%, #6366f1 100%)',
-      accentGlow: '0 0 18px rgba(56, 189, 248, 0.5)',
-      textColor: '#f8fafc',
-      subText: '#94a3b8',
-      itemBg: 'rgba(255, 255, 255, 0.03)',
-      itemBorder: 'rgba(255, 255, 255, 0.06)',
-      itemHoverBorder: 'rgba(56, 189, 248, 0.35)',
-      pillBg: 'linear-gradient(135deg, rgba(14, 23, 42, 0.88) 0%, rgba(15, 23, 42, 0.96) 100%)',
-      pillBorder: 'rgba(56, 189, 248, 0.38)',
-      pillColor: '#38bdf8',
-      dotColor: '#38bdf8',
-      chipBg: 'rgba(56, 189, 248, 0.14)',
-      chipColor: '#38bdf8',
-      previewGradients: 'linear-gradient(135deg, #00f0ff, #6366f1)',
-      isDark: true,
-      workspaceBg: '#070b14',
-      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(0, 240, 255, 0.16) 0%, rgba(14, 28, 54, 0.72) 42%, #080c14 85%)',
-      workspaceSidebar: '#04070d',
-      workspaceInputBg: '#0c1322',
-      workspaceBorder: 'rgba(56, 189, 248, 0.16)',
-      workspaceCardBorder: 'rgba(56, 189, 248, 0.22)',
-      chatTextColor: '#f8fafc',
-      thinkingBg: 'rgba(56, 189, 248, 0.07)',
-      thinkingBorder: 'rgba(56, 189, 248, 0.28)',
-      formulaColor: '#38bdf8',
-      formulaGlow: '0 0 10px rgba(56, 189, 248, 0.45)'
-    },
-    pastel: {
-      id: 'pastel',
-      name: 'صورتی پاستیلی',
-      desc: 'شکوفه، آبنباتی و یاسی کیوت • فونت Fredoka & وزیرمتن',
-      icon: '🎀',
-      fontFamily: "'Fredoka', 'Vazirmatn', sans-serif",
-      fontEn: "'Fredoka', sans-serif",
-      fontFa: "'Vazirmatn', sans-serif",
-      cardBg: 'radial-gradient(circle at 15% 15%, rgba(255, 112, 166, 0.28), transparent 55%), radial-gradient(circle at 85% 85%, rgba(216, 180, 254, 0.25), transparent 50%), linear-gradient(155deg, rgba(38, 16, 34, 0.95) 0%, rgba(22, 10, 22, 0.98) 100%)',
-      cardBorder: 'rgba(255, 112, 166, 0.48)',
-      cardShadow: '0 32px 85px -15px rgba(0, 0, 0, 0.88), 0 0 35px rgba(255, 112, 166, 0.28), inset 0 1px 2px 0 rgba(255, 255, 255, 0.35)',
-      accent: '#ff70a6',
-      accentSecondary: '#d8b4fe',
-      accentGrad: 'linear-gradient(90deg, #ff70a6 0%, #ff9770 35%, #ffd670 70%, #d8b4fe 100%)',
-      accentGlow: '0 0 20px rgba(255, 112, 166, 0.65)',
-      textColor: '#fff5f8',
-      subText: '#fbcfe8',
-      itemBg: 'rgba(255, 255, 255, 0.05)',
-      itemBorder: 'rgba(255, 112, 166, 0.22)',
-      itemHoverBorder: 'rgba(255, 112, 166, 0.55)',
-      pillBg: 'linear-gradient(135deg, rgba(58, 22, 48, 0.92) 0%, rgba(32, 12, 28, 0.98) 100%)',
-      pillBorder: 'rgba(255, 112, 166, 0.5)',
-      pillColor: '#ff70a6',
-      dotColor: '#ff70a6',
-      chipBg: 'rgba(255, 112, 166, 0.2)',
-      chipColor: '#ff9ebb',
-      previewGradients: 'linear-gradient(135deg, #ff70a6, #ffd670, #c084fc)',
-      isDark: true,
-      workspaceBg: '#160b16',
-      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(255, 112, 166, 0.18) 0%, rgba(58, 22, 48, 0.72) 42%, #160b16 85%)',
-      workspaceSidebar: '#0e060e',
-      workspaceInputBg: '#221024',
-      workspaceBorder: 'rgba(255, 112, 166, 0.22)',
-      workspaceCardBorder: 'rgba(255, 112, 166, 0.32)',
-      chatTextColor: '#fff5f8',
-      thinkingBg: 'rgba(255, 112, 166, 0.09)',
-      thinkingBorder: 'rgba(255, 112, 166, 0.35)',
-      formulaColor: '#ff70a6',
-      formulaGlow: '0 0 10px rgba(255, 112, 166, 0.5)'
-    },
-    gravity: {
-      id: 'gravity',
-      name: 'گرویتی استودیو',
-      desc: 'هارمونی استودیو ادیتور • فونت Inter & وزیرمتن',
-      icon: '⚡',
-      fontFamily: "'Inter', 'Vazirmatn', sans-serif",
-      fontEn: "'Inter', sans-serif",
-      fontFa: "'Vazirmatn', sans-serif",
-      cardBg: 'radial-gradient(circle at 80% 20%, rgba(66, 133, 244, 0.12), transparent 50%), linear-gradient(155deg, rgba(24, 26, 32, 0.94) 0%, rgba(14, 15, 19, 0.98) 100%)',
-      cardBorder: 'rgba(255, 255, 255, 0.15)',
-      cardShadow: '0 32px 85px -15px rgba(0, 0, 0, 0.92), inset 0 1px 1px 0 rgba(255, 255, 255, 0.18)',
-      accent: '#4285f4',
-      accentSecondary: '#f59e0b',
-      accentGrad: 'linear-gradient(90deg, #4285f4 0%, #60a5fa 50%, #f59e0b 100%)',
-      accentGlow: '0 0 16px rgba(66, 133, 244, 0.45)',
-      textColor: '#f8fafc',
-      subText: '#94a3b8',
-      itemBg: 'rgba(255, 255, 255, 0.035)',
-      itemBorder: 'rgba(255, 255, 255, 0.07)',
-      itemHoverBorder: 'rgba(66, 133, 244, 0.4)',
-      pillBg: 'linear-gradient(135deg, rgba(30, 32, 40, 0.88) 0%, rgba(18, 19, 25, 0.96) 100%)',
-      pillBorder: 'rgba(255, 255, 255, 0.2)',
-      pillColor: '#60a5fa',
-      dotColor: '#4285f4',
-      chipBg: 'rgba(66, 133, 244, 0.15)',
-      chipColor: '#93c5fd',
-      previewGradients: 'linear-gradient(135deg, #4285f4, #f59e0b)',
-      isDark: true,
-      workspaceBg: '#101114',
-      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(66, 133, 244, 0.16) 0%, rgba(24, 30, 48, 0.72) 42%, #101114 85%)',
-      workspaceSidebar: '#0c0d10',
-      workspaceInputBg: '#16181d',
-      workspaceBorder: 'rgba(255, 255, 255, 0.08)',
-      workspaceCardBorder: 'rgba(255, 255, 255, 0.12)',
-      chatTextColor: '#f8fafc',
-      thinkingBg: 'rgba(66, 133, 244, 0.06)',
-      thinkingBorder: 'rgba(66, 133, 244, 0.22)',
-      formulaColor: '#60a5fa',
-      formulaGlow: '0 0 8px rgba(96, 165, 250, 0.4)'
-    },
-    emerald: {
-      id: 'emerald',
-      name: 'زمرد کوانت',
-      desc: 'ترمینال مالی بلومبرگ • فونت JetBrains Mono & استعداد',
-      icon: '🌿',
-      fontFamily: "'JetBrains Mono', 'Estedad', monospace",
-      fontEn: "'JetBrains Mono', monospace",
-      fontFa: "'Estedad', sans-serif",
-      cardBg: 'radial-gradient(circle at 50% 10%, rgba(16, 185, 129, 0.16), transparent 55%), linear-gradient(155deg, rgba(5, 22, 17, 0.94) 0%, rgba(3, 12, 9, 0.98) 100%)',
-      cardBorder: 'rgba(16, 185, 129, 0.35)',
-      cardShadow: '0 32px 85px -15px rgba(0, 0, 0, 0.9), 0 0 35px rgba(16, 185, 129, 0.18), inset 0 1px 1px 0 rgba(255, 255, 255, 0.2)',
-      accent: '#10b981',
-      accentSecondary: '#00ff9d',
-      accentGrad: 'linear-gradient(90deg, #10b981 0%, #34d399 50%, #00ff9d 100%)',
-      accentGlow: '0 0 18px rgba(16, 185, 129, 0.5)',
-      textColor: '#f0fdf4',
-      subText: '#86efac',
-      itemBg: 'rgba(255, 255, 255, 0.03)',
-      itemBorder: 'rgba(16, 185, 129, 0.15)',
-      itemHoverBorder: 'rgba(16, 185, 129, 0.42)',
-      pillBg: 'linear-gradient(135deg, rgba(8, 36, 28, 0.88) 0%, rgba(4, 18, 14, 0.96) 100%)',
-      pillBorder: 'rgba(16, 185, 129, 0.38)',
-      pillColor: '#34d399',
-      dotColor: '#00ff9d',
-      chipBg: 'rgba(16, 185, 129, 0.15)',
-      chipColor: '#6ee7b7',
-      previewGradients: 'linear-gradient(135deg, #10b981, #00ff9d)',
-      isDark: true,
-      workspaceBg: '#040f0c',
-      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(16, 185, 129, 0.18) 0%, rgba(12, 44, 26, 0.72) 42%, #040f0c 85%)',
-      workspaceSidebar: '#020806',
-      workspaceInputBg: '#081d17',
-      workspaceBorder: 'rgba(16, 185, 129, 0.16)',
-      workspaceCardBorder: 'rgba(16, 185, 129, 0.24)',
-      chatTextColor: '#f0fdf4',
-      thinkingBg: 'rgba(16, 185, 129, 0.07)',
-      thinkingBorder: 'rgba(16, 185, 129, 0.28)',
-      formulaColor: '#00ff9d',
-      formulaGlow: '0 0 10px rgba(0, 255, 157, 0.45)'
-    },
-    vision: {
-      id: 'vision',
-      name: 'ویژن فراست',
-      desc: 'کریستال مات VisionOS • فونت Plus Jakarta & وزیرمتن',
-      icon: '❄️',
-      fontFamily: "'Plus Jakarta Sans', 'Vazirmatn', sans-serif",
-      fontEn: "'Plus Jakarta Sans', sans-serif",
-      fontFa: "'Vazirmatn', sans-serif",
-      cardBg: 'linear-gradient(155deg, rgba(32, 38, 52, 0.82) 0%, rgba(16, 20, 30, 0.94) 100%)',
-      cardBorder: 'rgba(255, 255, 255, 0.32)',
-      cardShadow: '0 32px 85px -15px rgba(0, 0, 0, 0.88), inset 0 1px 2px 0 rgba(255, 255, 255, 0.35), inset 0 0 0 1px rgba(255, 255, 255, 0.1)',
-      accent: '#ffffff',
-      accentSecondary: '#cbd5e1',
-      accentGrad: 'linear-gradient(90deg, #ffffff 0%, #e2e8f0 50%, #94a3b8 100%)',
-      accentGlow: '0 0 18px rgba(255, 255, 255, 0.55)',
-      textColor: '#ffffff',
-      subText: '#cbd5e1',
-      itemBg: 'rgba(255, 255, 255, 0.05)',
-      itemBorder: 'rgba(255, 255, 255, 0.12)',
-      itemHoverBorder: 'rgba(255, 255, 255, 0.4)',
-      pillBg: 'linear-gradient(135deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.08) 100%)',
-      pillBorder: 'rgba(255, 255, 255, 0.35)',
-      pillColor: '#ffffff',
-      dotColor: '#ffffff',
-      chipBg: 'rgba(255, 255, 255, 0.14)',
-      chipColor: '#ffffff',
-      previewGradients: 'linear-gradient(135deg, #ffffff, #94a3b8)',
-      isDark: true,
-      workspaceBg: '#0d0f14',
-      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(255, 255, 255, 0.12) 0%, rgba(32, 38, 52, 0.65) 42%, #0d0f14 85%)',
-      workspaceSidebar: '#090a0d',
-      workspaceInputBg: '#141720',
-      workspaceBorder: 'rgba(255, 255, 255, 0.1)',
-      workspaceCardBorder: 'rgba(255, 255, 255, 0.18)',
-      chatTextColor: '#ffffff',
-      thinkingBg: 'rgba(255, 255, 255, 0.06)',
-      thinkingBorder: 'rgba(255, 255, 255, 0.22)',
-      formulaColor: '#ffffff',
-      formulaGlow: '0 0 8px rgba(255, 255, 255, 0.5)'
-    },
-    sunset: {
-      id: 'sunset',
-      name: 'افق سولار',
-      desc: 'مرجانی و کهکشانی • فونت Outfit & استعداد',
-      icon: '🌅',
-      fontFamily: "'Outfit', 'Estedad', sans-serif",
+    neutral: {
+      id: "neutral",
+      name: "هماهنگ با سیستم",
+      desc: "طراحی خنثی و هماهنگ با تم سیستم",
+      icon: "🔤",
+      fontFamily: "'Outfit', 'Vazirmatn', sans-serif",
       fontEn: "'Outfit', sans-serif",
-      fontFa: "'Estedad', sans-serif",
-      cardBg: 'radial-gradient(circle at 80% 20%, rgba(251, 146, 60, 0.18), transparent 55%), linear-gradient(155deg, rgba(32, 14, 22, 0.94) 0%, rgba(18, 8, 15, 0.98) 100%)',
-      cardBorder: 'rgba(251, 146, 60, 0.35)',
-      cardShadow: '0 32px 85px -15px rgba(0, 0, 0, 0.9), 0 0 35px rgba(251, 146, 60, 0.18), inset 0 1px 1px 0 rgba(255, 255, 255, 0.22)',
-      accent: '#fb923c',
-      accentSecondary: '#f43f5e',
-      accentGrad: 'linear-gradient(90deg, #fb923c 0%, #f43f5e 50%, #e11d48 100%)',
-      accentGlow: '0 0 18px rgba(251, 146, 60, 0.5)',
-      textColor: '#fff7ed',
-      subText: '#fdba74',
-      itemBg: 'rgba(255, 255, 255, 0.04)',
-      itemBorder: 'rgba(251, 146, 60, 0.15)',
-      itemHoverBorder: 'rgba(251, 146, 60, 0.42)',
-      pillBg: 'linear-gradient(135deg, rgba(45, 18, 25, 0.88) 0%, rgba(24, 10, 15, 0.96) 100%)',
-      pillBorder: 'rgba(251, 146, 60, 0.42)',
-      pillColor: '#fb923c',
-      dotColor: '#f97316',
-      chipBg: 'rgba(251, 146, 60, 0.16)',
-      chipColor: '#fed7aa',
-      previewGradients: 'linear-gradient(135deg, #fb923c, #f43f5e)',
-      isDark: true,
-      workspaceBg: '#12080d',
-      bgGradient: 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(251, 146, 60, 0.18) 0%, rgba(55, 26, 10, 0.72) 42%, #12080d 85%)',
-      workspaceSidebar: '#0a0407',
-      workspaceInputBg: '#1b0d14',
-      workspaceBorder: 'rgba(251, 146, 60, 0.18)',
-      workspaceCardBorder: 'rgba(251, 146, 60, 0.26)',
-      chatTextColor: '#fff7ed',
-      thinkingBg: 'rgba(251, 146, 60, 0.08)',
-      thinkingBorder: 'rgba(251, 146, 60, 0.28)',
-      formulaColor: '#fb923c',
-      formulaGlow: '0 0 10px rgba(251, 146, 60, 0.45)'
+      fontFa: "'Vazirmatn', sans-serif",
+      cardBg: "linear-gradient(155deg, rgba(18, 22, 31, 0.96) 0%, rgba(11, 14, 20, 0.98) 100%)",
+      cardBorder: "rgba(255, 255, 255, 0.12)",
+      cardShadow: "0 24px 60px -10px rgba(0, 0, 0, 0.75), 0 0 1px rgba(255, 255, 255, 0.15)",
+      accent: "#38bdf8",
+      accentSecondary: "#818cf8",
+      accentGrad: "linear-gradient(90deg, #38bdf8 0%, #6366f1 100%)",
+      accentGlow: "0 0 12px rgba(56, 189, 248, 0.25)",
+      textColor: "#f8fafc",
+      subText: "#94a3b8",
+      itemBg: "rgba(255, 255, 255, 0.04)",
+      itemBorder: "rgba(255, 255, 255, 0.08)",
+      itemHoverBorder: "rgba(255, 255, 255, 0.2)",
+      pillBg: "rgba(255, 255, 255, 0.06)",
+      pillBorder: "rgba(255, 255, 255, 0.12)",
+      pillColor: "#f8fafc",
+      dotColor: "#10b981",
+      chipBg: "rgba(255, 255, 255, 0.08)",
+      chipColor: "#e2e8f0",
+      previewGradients: "linear-gradient(135deg, #38bdf8, #6366f1)",
+      isDark: true
     }
   };
 
-  const userSettings = (typeof window !== 'undefined' && window.__antigravity_user_settings) || {};
+  // userSettings is defined at top level for early initialization
 
-  let currentThemeId = 'cyber';
+  let currentThemeId = 'neutral';
   if (userSettings.theme && THEMES[userSettings.theme]) {
     currentThemeId = userSettings.theme;
   } else {
@@ -781,6 +646,36 @@
   }
 
   let isImportFormOpen = false;
+  let stagedFontFile = null;
+
+  function getFontFormatFromFileName(fileName) {
+    if (!fileName) return 'woff2';
+    const ext = fileName.split('.').pop().toLowerCase();
+    if (ext === 'woff2') return 'woff2';
+    if (ext === 'woff') return 'woff';
+    if (ext === 'ttf') return 'truetype';
+    if (ext === 'otf') return 'opentype';
+    return 'woff2';
+  }
+
+  function deriveFontNameFromFile(fileName) {
+    if (!fileName) return '';
+    let base = fileName.replace(/\.[^/.]+$/, '');
+    base = base.replace(/[-_]+/g, ' ').trim();
+    return sanitizeFontName(base);
+  }
+
+  function sanitizeFontName(name) {
+    if (!name || typeof name !== "string") return "";
+    return name.replace(/[^a-zA-Z0-9\s\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF\-_]/g, "").trim().slice(0, 50);
+  }
+
+  function sanitizeFontUrl(url) {
+    if (!url || typeof url !== "string") return "";
+    const trimmed = url.trim();
+    if (!trimmed || !/^https?:\/\//i.test(trimmed)) return "";
+    return trimmed.replace(/[^a-zA-Z0-9\:\/\.\_\-\?\&\=\%\+\@\;\,\#]/g, "").slice(0, 500);
+  }
 
   function cleanFontName(fontStr) {
     if (!fontStr) return '';
@@ -790,9 +685,10 @@
       .trim();
   }
 
-  function getEffectiveFonts(theme) {
-    const rawEn = (customFontEn !== 'default') ? customFontEn : cleanFontName(theme.fontEn || 'Outfit');
-    const rawFa = (customFontFa !== 'default') ? customFontFa : cleanFontName(theme.fontFa || 'Vazirmatn');
+  function getEffectiveFonts(theme = getActiveTheme()) {
+    const safeTheme = theme || getActiveTheme() || {};
+    const rawEn = (customFontEn !== 'default') ? cleanFontName(customFontEn) : cleanFontName(safeTheme.fontEn || 'Outfit');
+    const rawFa = (customFontFa !== 'default') ? cleanFontName(customFontFa) : cleanFontName(safeTheme.fontFa || 'Vazirmatn');
     const fontEn = `'${rawEn}', sans-serif`;
     const fontFa = `'${rawFa}', sans-serif`;
     const fullFamily = `'${rawEn}', '${rawFa}', sans-serif`;
@@ -800,11 +696,7 @@
   }
 
   function getActiveTheme() {
-    try {
-      const savedTheme = localStorage.getItem('antigravity:quota_theme');
-      if (savedTheme && THEMES[savedTheme]) currentThemeId = savedTheme;
-    } catch (e) {}
-    return THEMES[currentThemeId] || THEMES.cyber;
+    return THEMES.neutral;
   }
 
   function applyAppWorkspaceTheme(theme, enabled) {
@@ -829,130 +721,54 @@
       #antigravity-usage-popover [data-font="mono"] {
         font-family: 'JetBrains Mono', monospace !important;
       }
-    `;
 
-    let style = document.getElementById('aqm-app-workspace-theme');
-    if (!enabled) {
-      if (style) style.remove();
-      return;
-    }
-    if (!style) {
-      style = document.createElement('style');
-      style.id = 'aqm-app-workspace-theme';
-      safeAppendToHead(style);
-    }
-
-    style.textContent = `
-      :root, body, .theme-standalone, div.h-screen.w-screen {
-        --background: transparent !important;
-        --color-background: transparent !important;
-        --content: ${theme.workspaceInputBg || '#141414'} !important;
-        --border: ${theme.workspaceBorder || 'rgba(255,255,255,0.06)'} !important;
-        --card-border: ${theme.workspaceCardBorder || 'rgba(255,255,255,0.1)'} !important;
-        --sidebar: ${theme.workspaceSidebar || '#161616'} !important;
-        --color-sidebar-secondary: ${theme.workspaceSidebar || '#161616'} !important;
-        --color-primary: ${theme.accent} !important;
-        --color-code: ${theme.formulaColor || theme.accent} !important;
-        --code-foreground: ${theme.formulaColor || theme.accent} !important;
-        --font-sans: ${fullFamily} !important;
-        background-color: ${theme.workspaceBg || '#080c14'} !important;
-        background-image: ${theme.bgGradient || 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(0, 240, 255, 0.16) 0%, rgba(14, 28, 54, 0.72) 42%, #080c14 85%)'} !important;
-        background-attachment: fixed !important;
-        background-size: cover !important;
-        background-repeat: no-repeat !important;
+      /* Fix Menu Bar & Dropdowns Stacking Context */
+      div.h-screen.w-screen > div.shrink-0 {
+        position: relative !important;
+        z-index: 99999 !important;
       }
-      body {
-        background-color: ${theme.workspaceBg || '#080c14'} !important;
-        background-image: ${theme.bgGradient || 'radial-gradient(ellipse 95% 70% at 50% -10%, rgba(0, 240, 255, 0.16) 0%, rgba(14, 28, 54, 0.72) 42%, #080c14 85%)'} !important;
-        background-attachment: fixed !important;
-        background-size: cover !important;
-        font-family: ${fullFamily} !important;
-      }
-      .bg-background, div.bg-background, main, [class*="main-content"] {
-        background: transparent !important;
-        background-color: transparent !important;
-      }
-      .bg-sidebar {
-        background: ${theme.workspaceSidebar ? theme.workspaceSidebar + 'd8' : 'rgba(6, 9, 16, 0.85)'} !important;
-        backdrop-filter: blur(20px) !important;
-        -webkit-backdrop-filter: blur(20px) !important;
-        border-right: 1px solid ${theme.workspaceBorder || 'rgba(255,255,255,0.06)'} !important;
-      }
-      header, [class*="titlebar"], [class*="Header"] {
-        background: ${theme.workspaceSidebar ? theme.workspaceSidebar + 'c0' : 'rgba(6, 9, 16, 0.75)'} !important;
-        backdrop-filter: blur(16px) !important;
-        -webkit-backdrop-filter: blur(16px) !important;
-        border-bottom: 1px solid ${theme.workspaceBorder || 'rgba(255,255,255,0.06)'} !important;
-      }
-      .no-focus-agent-input, textarea, [class*="chat-input"], [class*="Composer"] {
-        background-color: ${theme.workspaceInputBg || '#141414'} !important;
-        border: 1px solid ${theme.cardBorder || 'rgba(0, 240, 255, 0.35)'} !important;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), 0 0 15px ${theme.chipBg || 'rgba(0, 240, 255, 0.25)'} !important;
+      [data-radix-popper-content-wrapper],
+      [role="menu"],
+      [data-radix-menu-content],
+      [role="dialog"] {
+        z-index: 100000 !important;
+        pointer-events: auto !important;
       }
 
-      /* 1. Universal Chat, Prose, Markdown, Inputs & Prompts Typography */
+      /* 1. Universal Chat, Prose, Markdown, Inputs & Prompts Typography (Fonts ONLY, Native Colors Untouched) */
       .markdown, [class*="prose"], .theme-standalone p, .theme-standalone li, .theme-standalone span,
       [data-testid*="user-input"], [data-testid*="user-input-step"] *, [data-testid*="chat-message"] *:not(pre):not(code),
       [class*="leading-relaxed"] *:not(pre):not(code), .line-content,
       [class*="conversation"] p, [class*="conversation"] span,
       [class*="conversation"] div:not([class*="code"]):not(pre),
-      [class*="markdown-body"] *:not(pre):not(code) {
+      [class*="markdown-body"] *:not(pre):not(code),
+      [contenteditable="true"], [contenteditable="true"] *, [data-lexical-text="true"], textarea[data-testid="ask-question-writein"] {
         font-family: ${fullFamily} !important;
-      }
-      .markdown, [class*="prose"], .theme-standalone p, .theme-standalone li {
-        color: ${theme.chatTextColor || theme.textColor} !important;
       }
       .theme-standalone h1, .theme-standalone h2, .theme-standalone h3, .theme-standalone h4,
       [class*="conversation"] h1, [class*="conversation"] h2, [class*="conversation"] h3, [class*="conversation"] h4 {
-        color: ${theme.textColor} !important;
         font-family: ${fullFamily} !important;
         letter-spacing: -0.01em;
       }
 
-      /* 2. Model Thinking / Reasoning Process Blocks */
-      [class*="thinking"], [class*="thought"], details[class*="thought"], [data-testid*="thought"], [data-testid*="thinking"] {
-        background-color: ${theme.thinkingBg || 'rgba(255, 255, 255, 0.03)'} !important;
-        border: 1px solid ${theme.thinkingBorder || theme.itemBorder} !important;
-        border-radius: 12px !important;
-      }
-      [class*="thinking"] summary, [class*="thought"] summary, [class*="thinking"] [class*="title"] {
-        color: ${theme.accent} !important;
-        font-weight: 600 !important;
-      }
-
-      /* 3. Mathematical Formulas (KaTeX / LaTeX) */
+      /* 2. Mathematical Formulas (KaTeX / LaTeX) Font Protection */
       .katex, .katex-display, .katex-html, math {
-        color: ${theme.formulaColor || theme.accent} !important;
-        text-shadow: ${theme.formulaGlow || 'none'} !important;
-        font-weight: 600 !important;
+        font-family: KaTeX_Main, ${fullFamily} !important;
       }
 
-      /* 4. Highlighted Code & Inline Code */
+      /* 3. Inline Code Font */
       :not(pre) > code {
-        background-color: ${theme.chipBg || 'rgba(255, 255, 255, 0.08)'} !important;
-        color: ${theme.accent} !important;
-        border: 1px solid ${theme.itemBorder || 'rgba(255, 255, 255, 0.12)'} !important;
-        border-radius: 6px !important;
-        padding: 1.5px 6px !important;
         font-family: 'JetBrains Mono', monospace !important;
         font-size: 0.9em !important;
       }
-      pre {
-        border: 1px solid ${theme.workspaceBorder || 'rgba(255, 255, 255, 0.08)'} !important;
-        border-radius: 12px !important;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25) !important;
-      }
-
-      /* 5. Tool Calls & Action Cards */
-      [data-testid*="tool"], [class*="tool-call"], [class*="action-card"], [class*="step-container"] {
-        border-color: ${theme.workspaceCardBorder || theme.itemBorder} !important;
-        transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
-      }
-      [data-testid*="tool"]:hover, [class*="tool-call"]:hover {
-        border-color: ${theme.accent} !important;
-        box-shadow: 0 0 15px ${theme.chipBg} !important;
-      }
     `;
+
+    // Remove legacy full-workspace color override to preserve native Antigravity colors
+    const oldColorStyle = document.getElementById('aqm-app-workspace-theme');
+    if (oldColorStyle) {
+      oldColorStyle.remove();
+    }
+
     applyRtlStyles();
   }
 
@@ -1062,7 +878,10 @@
       }
 
       /* Smart Direction for Navigation & Sidebar */
-      [role="navigation"][aria-label="Sidebar"] *, .truncate {
+      [role="navigation"][aria-label="Sidebar"] *,
+      [role="navigation"][aria-label="Sidebar"] .truncate,
+      [data-testid="chat-message"] .truncate,
+      [class*="conversation"] .truncate {
         unicode-bidi: plaintext !important;
         text-align: start !important;
       }
@@ -1126,9 +945,9 @@
   // Set up RTL observers & keyboard listeners
   if (!window.__aqm_rtl_listener_bound) {
     window.__aqm_rtl_listener_bound = true;
-    document.body.addEventListener('input', debouncedUpdateDir, { capture: true, passive: true });
+    onGlobal(document.body, 'input', debouncedUpdateDir, { capture: true, passive: true });
 
-    document.addEventListener('keydown', (e) => {
+    onGlobal(document, 'keydown', (e) => {
       // Alt + R to toggle RTL
       if (e.altKey && e.code === 'KeyR') {
         e.preventDefault();
@@ -1169,6 +988,7 @@
   let dragStartX = 0, dragStartY = 0;
   let popStartLeft = 0, popStartTop = 0;
 
+  let activePopoverTab = 'quota'; // 'quota' | 'fonts' | 'rtl'
   let isRefreshing = false;
   let activeTaskPollingInterval = null;
 
@@ -1494,6 +1314,19 @@
         </defs>
       </svg>
     `,
+    argon: `
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" style="flex-shrink:0;">
+        <path d="M12 1L14.8 8.6L22 12L14.8 15.4L12 23L9.2 15.4L2 12L9.2 8.6L12 1Z" fill="url(#aqmArgonGrad)"/>
+        <circle cx="12" cy="12" r="3" fill="#ffffff" opacity="0.95"/>
+        <defs>
+          <linearGradient id="aqmArgonGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#00f2fe"/>
+            <stop offset="50%" stop-color="#4facfe"/>
+            <stop offset="100%" stop-color="#7f00ff"/>
+          </linearGradient>
+        </defs>
+      </svg>
+    `,
     claude: `
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" style="flex-shrink:0;">
         <path d="M13.8 2.5a1.8 1.8 0 0 0-3.6 0l-.8 7.3a1.8 1.8 0 0 1-1.6 1.6l-7.3.8a1.8 1.8 0 0 0 0 3.6l7.3.8a1.8 1.8 0 0 1 1.6 1.6l.8 7.3a1.8 1.8 0 0 0 3.6 0l.8-7.3a1.8 1.8 0 0 1 1.6-1.6l7.3-.8a1.8 1.8 0 0 0 0-3.6l-7.3-.8a1.8 1.8 0 0 1-1.6-1.6l-.8-7.3z" fill="#D97706"/>
@@ -1559,12 +1392,12 @@
 
     if (!window.__aqm_click_bound) {
       window.__aqm_click_bound = true;
-      document.addEventListener('click', (e) => {
+      onGlobal(document, 'click', (e) => {
         const p = document.getElementById('antigravity-usage-popover');
-        const pl = document.getElementById('antigravity-usage-pill');
+        const ap = document.getElementById('antigravity-account-pill');
         if (p && p.style.display !== 'none') {
           if (Date.now() - lastPopoverOpenTime < 250) return;
-          if (!p.contains(e.target) && (!pl || !pl.contains(e.target))) {
+          if (!p.contains(e.target) && (!ap || !ap.contains(e.target))) {
             p.style.display = 'none';
             const drop = document.getElementById('aqm-theme-dropdown');
             if (drop) drop.style.display = 'none';
@@ -1575,9 +1408,54 @@
     return pop;
   }
 
+  function getActiveAccountInfo() {
+    const isInst2 = isInstance2Window();
+    let designatedEmail = '';
+    try {
+      designatedEmail = localStorage.getItem('antigravity:account_email') || window.__antigravity_account || (swState.activeAccount && swState.activeAccount.email) || (currentUsage && currentUsage.email) || '';
+    } catch(e) {}
+    if (!designatedEmail && swState.savedAccounts) {
+      const keys = Object.keys(swState.savedAccounts);
+      if (keys.length > 0) designatedEmail = (isInst2 ? (keys[1] || keys[0]) : keys[0]);
+    }
+    let targetKey = designatedEmail;
+    if (swState.savedAccounts && !swState.savedAccounts[targetKey]) {
+      const matchKey = Object.keys(swState.savedAccounts).find(k => k.toLowerCase() === targetKey.toLowerCase());
+      if (matchKey) targetKey = matchKey;
+    }
+    const savedInfo = (swState.savedAccounts && swState.savedAccounts[targetKey]) || {};
+    let fallbackName = savedInfo.name || (targetKey ? (targetKey.split('@')[0].split('.')[0].charAt(0).toUpperCase() + targetKey.split('@')[0].split('.')[0].slice(1)) : 'Account');
+    let fallbackAvatar = savedInfo.avatar || '';
+    let accUser = { email: targetKey, name: fallbackName, avatar: fallbackAvatar, tier: savedInfo.tier || 'Google AI Pro', tier_code: savedInfo.tier_code || 'pro' };
+    if (swState.activeAccount && swState.activeAccount.email && swState.activeAccount.email.toLowerCase() === targetKey.toLowerCase()) {
+      accUser = { ...accUser, ...swState.activeAccount };
+    } else if (currentUsage && currentUsage.email && currentUsage.email.toLowerCase() === targetKey.toLowerCase()) {
+      accUser = { ...accUser, ...currentUsage };
+    }
+    if (accUser.name && (accUser.name === 'Account 2' || accUser.name.toLowerCase() === 'user')) {
+      accUser.name = savedInfo.name || fallbackName;
+    }
+    const accEmail = targetKey;
+    const accName = accUser.name || fallbackName;
+    const accAvatar = accUser.avatar || fallbackAvatar;
+    const accTier = accUser.tier || 'Google AI Pro';
+    const accTierCode = (accUser.tier_code || 'pro').toLowerCase();
+    const tierBadgeBg = accTierCode === 'ultra' ? 'linear-gradient(135deg, #ec4899, #8b5cf6)' : (accTierCode === 'pro' ? 'linear-gradient(135deg, rgba(245,158,11,0.25), rgba(217,119,6,0.35))' : 'rgba(148,163,184,0.15)');
+    const tierBadgeColor = accTierCode === 'ultra' ? '#ffffff' : (accTierCode === 'pro' ? '#fbbf24' : '#94a3b8');
+    const tierBadgeBorder = accTierCode === 'ultra' ? 'rgba(236,72,153,0.5)' : (accTierCode === 'pro' ? 'rgba(251,191,36,0.45)' : 'rgba(148,163,184,0.25)');
+    const initialChar = accName ? accName.charAt(0).toUpperCase() : (targetKey ? targetKey.charAt(0).toUpperCase() : 'A');
+    return { accEmail, accName, accAvatar, accTier, accTierCode, initialChar, tierBadgeBg, tierBadgeColor, tierBadgeBorder };
+  }
+
   function renderPopover() {
+    const turboBtn = document.querySelector('[data-testid="permissions-selector-trigger"]') || Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('Turbo'));
     const trigger = document.querySelector('[data-testid="model-selector-trigger"]');
-    if (!trigger) return;
+    const anchor = document.getElementById('antigravity-account-pill') || turboBtn || trigger || document.getElementById('antigravity-quota-dock');
+    let customPos = null;
+    try {
+      customPos = JSON.parse(localStorage.getItem('antigravity:popover_pos') || 'null');
+    } catch (e) {}
+    if (!anchor && !customPos) return;
 
     const theme = getActiveTheme();
     const { fontEn, fontFa, fullFamily } = getEffectiveFonts(theme);
@@ -1593,15 +1471,9 @@
     pop.style.color = theme.textColor;
     pop.style.fontFamily = fullFamily;
 
-    let customPos = null;
-    try {
-      customPos = JSON.parse(localStorage.getItem('antigravity:popover_pos') || 'null');
-    } catch (e) {}
-
-    const anchor = document.getElementById('antigravity-usage-pill') || trigger;
-    const rect = anchor.getBoundingClientRect();
+    const rect = anchor ? anchor.getBoundingClientRect() : { left: 24, top: window.innerHeight - 80, bottom: window.innerHeight - 40 };
     const popWidth = 445;
-    const popHeight = 494;
+    const popHeight = 470;
 
     if (customPos && customPos.left !== undefined && customPos.top !== undefined) {
       let l = parseFloat(customPos.left);
@@ -1647,7 +1519,7 @@
     if (email === 'developer@antigravity.ai' || !email) {
       email = window.__antigravity_account || localStorage.getItem('antigravity:account_email') || 'user@example.com';
     }
-    const displayEmail = isPrivacyMode ? '••••••••••••@gmail.com' : email;
+    let displayEmail = isPrivacyMode ? '••••••••••••@gmail.com' : email;
 
     const mainPct = isRem ? sessRem : sessUsed;
     const subPct = isRem ? sessUsed : sessRem;
@@ -1660,7 +1532,8 @@
 
     const activeModel = getActiveModelName();
 
-    const geminiPool = (currentUsage.pools || []).find(p => p.name?.toLowerCase().includes('gemini'));
+    const geminiPool = (currentUsage.pools || []).find(p => p.name?.toLowerCase().includes('gemini') || p.name?.toLowerCase().includes('flash'));
+    const argonPool = (currentUsage.pools || []).find(p => p.name?.toLowerCase().includes('argon'));
     const claudeGptPool = (currentUsage.pools || []).find(p => p.name?.toLowerCase().includes('claude') || p.name?.toLowerCase().includes('gpt'));
 
     const geminiSessUsed = geminiPool ? Math.round(geminiPool.used_pct) : sessUsed;
@@ -1669,20 +1542,25 @@
     const geminiWeekUsed = geminiPool ? Math.round(geminiPool.weekly_pct) : weeklyUsed;
     const geminiResets = geminiPool?.resets_in || sessReset;
 
+    const argonSessUsed = argonPool ? Math.round(argonPool.used_pct) : 100;
+    const argonSessRem = argonPool ? Math.round(argonPool.remaining_pct) : 0;
+    const argonWeekRem = argonPool ? Math.round(argonPool.weekly_rem) : 0;
+    const argonWeekUsed = argonPool ? Math.round(argonPool.weekly_pct) : 100;
+    const argonResets = argonPool?.resets_in || '4d';
+
     const claudeSessUsed = claudeGptPool ? Math.round(claudeGptPool.used_pct) : 0;
     const claudeSessRem = claudeGptPool ? Math.round(claudeGptPool.remaining_pct) : 100;
     const claudeWeekRem = claudeGptPool ? Math.round(claudeGptPool.weekly_rem) : 97;
     const claudeWeekUsed = claudeGptPool ? Math.round(claudeGptPool.weekly_pct) : 3;
     const claudeResets = claudeGptPool?.resets_in || '5h';
 
-    // ACCURATE MODEL NAMES DETECTED IN ANTIGRAVITY
-    // Gemini 3.8 Flash, Gemini 3.1 Pro, Claude Sonnet 4.6, GPT-OSS 120B
+    // ACTIVE MODEL POOLS: Gemini, Argon, and GPT & Claude
     const pools = [
       {
-        id: 'gemini-flash',
-        name: 'Gemini 3.8 Flash',
+        id: 'gemini',
+        name: 'Gemini',
         svg: SVGS.gemini,
-        isActive: activeModel.toLowerCase().includes('flash'),
+        isActive: (activeModel.toLowerCase().includes('gemini') || activeModel.toLowerCase().includes('flash') || activeModel.toLowerCase().includes('pro')) && !activeModel.toLowerCase().includes('argon'),
         used_pct: geminiSessUsed,
         remaining_pct: geminiSessRem,
         weekly_rem: geminiWeekRem,
@@ -1690,48 +1568,26 @@
         resets_in: geminiResets
       },
       {
-        id: 'gemini-pro',
-        name: 'Gemini 3.1 Pro',
-        svg: SVGS.gemini,
-        isActive: activeModel.toLowerCase().includes('3.1') || (activeModel.toLowerCase().includes('pro') && !activeModel.toLowerCase().includes('flash')),
-        used_pct: geminiSessUsed,
-        remaining_pct: geminiSessRem,
-        weekly_rem: geminiWeekRem,
-        weekly_pct: geminiWeekUsed,
-        resets_in: geminiResets
+        id: 'argon',
+        name: 'Argon',
+        svg: SVGS.argon,
+        isActive: activeModel.toLowerCase().includes('argon'),
+        used_pct: argonSessUsed,
+        remaining_pct: argonSessRem,
+        weekly_rem: argonWeekRem,
+        weekly_pct: argonWeekUsed,
+        resets_in: argonResets
       },
       {
-        id: 'claude',
-        name: 'Claude Sonnet 4.6',
+        id: 'gpt-claude',
+        name: 'GPT & Claude',
         svg: SVGS.claude,
-        isActive: activeModel.toLowerCase().includes('claude'),
+        isActive: activeModel.toLowerCase().includes('claude') || activeModel.toLowerCase().includes('gpt') || activeModel.toLowerCase().includes('sonnet') || activeModel.toLowerCase().includes('oss'),
         used_pct: claudeSessUsed,
         remaining_pct: claudeSessRem,
         weekly_rem: claudeWeekRem,
         weekly_pct: claudeWeekUsed,
         resets_in: claudeResets
-      },
-      {
-        id: 'gpt-oss',
-        name: 'GPT-OSS 120B',
-        svg: SVGS.gpt,
-        isActive: activeModel.toLowerCase().includes('gpt') || activeModel.toLowerCase().includes('oss'),
-        used_pct: claudeSessUsed,
-        remaining_pct: claudeSessRem,
-        weekly_rem: claudeWeekRem,
-        weekly_pct: claudeWeekUsed,
-        resets_in: claudeResets
-      },
-      {
-        id: 'others',
-        name: 'سایر مدل‌های هوش مصنوعی',
-        svg: SVGS.standalone,
-        isActive: false,
-        used_pct: 0,
-        remaining_pct: 100,
-        weekly_rem: 100,
-        weekly_pct: 0,
-        resets_in: 'N/A'
       }
     ];
 
@@ -1783,25 +1639,6 @@
       `;
     }
 
-    const themeKeys = ['cyber', 'pastel', 'gravity', 'emerald', 'vision', 'sunset'];
-    let themeCardsHtml = '';
-    for (const tk of themeKeys) {
-      const t = THEMES[tk];
-      const isCur = (currentThemeId === tk);
-      themeCardsHtml += `
-        <div data-theme-id="${tk}" class="aqm-theme-card" style="background:${isCur ? (theme.isDark ? 'rgba(255,255,255,0.11)' : 'rgba(0,0,0,0.06)') : 'transparent'};border-color:${isCur ? theme.cardBorder : 'transparent'};">
-          <div style="display:flex;align-items:center;gap:10px;">
-            <div style="width:20px;height:20px;border-radius:50%;background:${t.previewGradients};box-shadow:0 0 10px ${t.accentGlow || 'rgba(0,0,0,0.3)'};border:1.5px solid rgba(255,255,255,0.25);flex-shrink:0;"></div>
-            <div style="display:flex;flex-direction:column;text-align:right;">
-              <span style="font-weight:700;font-size:11.8px;color:${isCur ? theme.accent : theme.textColor};font-family:${t.fontFa};">${t.name}</span>
-              <span style="font-size:9px;color:${theme.subText};opacity:0.85;font-family:${t.fontFa};">${t.desc}</span>
-            </div>
-          </div>
-          ${isCur ? `<span style="font-size:12px;font-weight:800;color:${theme.accent};">✓</span>` : ''}
-        </div>
-      `;
-    }
-
     const BUILTIN_FONTS_EN = [
       { id: 'default', label: 'پیش‌فرض' },
       { id: 'Fredoka', label: 'Fredoka' },
@@ -1828,20 +1665,42 @@
     const importedEn = customImportedFonts.filter(f => f.type === 'en');
     const importedFa = customImportedFonts.filter(f => f.type === 'fa');
 
+        const { accEmail, accName, accAvatar, accTier, accTierCode, initialChar, tierBadgeBg, tierBadgeColor, tierBadgeBorder } = getActiveAccountInfo();
+    displayEmail = isPrivacyMode ? '••••••••••••@gmail.com' : (accEmail || 'user@example.com');
+
+    let quickSwitchChipsHtml = '';
+    if (swState.savedAccounts) {
+      const otherAccounts = Object.keys(swState.savedAccounts).filter(k => k.toLowerCase() !== accEmail.toLowerCase());
+      if (otherAccounts.length > 0) {
+        quickSwitchChipsHtml = otherAccounts.map(k => {
+          const acc = swState.savedAccounts[k] || {};
+          const shortName = acc.name || k.split('@')[0];
+          return `<button type="button" data-switch-quick="${k}" title="سوئیچ آنی به ${k}" style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:6px;background:rgba(255,255,255,0.06);border:1px solid ${theme.itemBorder};color:${theme.textColor};font-size:9px;font-weight:600;cursor:pointer;white-space:nowrap;transition:all 0.15s ease;">
+            <span style="color:#fbbf24;font-size:9px;">⚡️</span>
+            <span dir="ltr">${shortName}</span>
+          </button>`;
+        }).join('');
+      } else {
+        quickSwitchChipsHtml = `<span style="font-size:9px;color:${theme.subText};opacity:0.75;font-family:${fontFa};">تنها ۱ حساب ذخیره است</span>`;
+      }
+    }
     pop.innerHTML = `
-      <!-- Header Area: Clean, Draggable & Privacy-Protected -->
-      <div id="aqm-drag-handle" style="display:flex;justify-content:space-between;align-items:center;direction:ltr;cursor:grab;user-select:none;padding-bottom:4px;" title="جهت جابه‌جایی پنجره بکشید (دوبار کلیک برای بازنشانی به موقعیت پیش‌فرض)">
+      <!-- 1. Header Area: Active Account, Privacy & Fast Window Controls -->
+      <div id="aqm-drag-handle" style="display:flex;justify-content:space-between;align-items:center;direction:ltr;cursor:grab;user-select:none;padding-bottom:8px;border-bottom:1px solid ${theme.itemBorder};" title="جهت جابه‌جایی پنجره بکشید (دوبار کلیک برای بازنشانی موقعیت)">
         <div style="display:flex;align-items:center;gap:9px;">
-          <div style="width:34px;height:34px;border-radius:10px;background:${theme.chipBg};border:1px solid ${theme.cardBorder};display:flex;align-items:center;justify-content:center;box-shadow:inset 0 1px 1px rgba(255,255,255,0.2);">
-            <div style="color:${theme.accent};filter:drop-shadow(0 0 6px ${theme.accent});">
-              ${SVGS.gemini}
-            </div>
+          <div style="position:relative;width:32px;height:32px;border-radius:50%;overflow:hidden;border:1.5px solid ${theme.cardBorder};background:${theme.chipBg};display:flex;align-items:center;justify-content:center;box-shadow:inset 0 1px 1px rgba(255,255,255,0.2);">
+            ${accAvatar ? `<img src="${accAvatar}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />` : ''}
+            <span style="${accAvatar ? 'display:none;' : 'display:flex;'}width:100%;height:100%;align-items:center;justify-content:center;font-weight:800;font-size:12px;color:#fff;background:linear-gradient(135deg, #3b82f6, #8b5cf6);">${initialChar}</span>
+            <span style="position:absolute;bottom:0;right:0;width:7px;height:7px;border-radius:50%;background:#10b981;border:1.5px solid #0f172a;box-shadow:0 0 6px #10b981;"></span>
           </div>
           <div>
-            <div data-font="en" style="font-weight:700;font-size:13.5px;letter-spacing:-0.02em;color:${theme.textColor};font-family:${fontEn};">Gemini Quota HUD</div>
+            <div style="display:flex;align-items:center;gap:5px;">
+              <span data-font="en" style="font-weight:700;font-size:13px;letter-spacing:-0.02em;color:${theme.textColor};font-family:${fontEn};">${accName}</span>
+              <span style="font-size:8.5px;font-weight:800;padding:1px 5px;border-radius:9999px;background:${tierBadgeBg};color:${tierBadgeColor};border:1px solid ${tierBadgeBorder};text-transform:uppercase;">${accTierCode.toUpperCase()}</span>
+            </div>
             <div style="display:flex;align-items:center;gap:5px;margin-top:0.5px;">
-              <span data-font="en" style="font-size:10.5px;color:${theme.subText};opacity:0.85;font-family:${fontEn};">${displayEmail}</span>
-              <button id="aqm-privacy-btn" type="button" title="${isPrivacyMode ? 'نمایش ایمیل' : 'مخفی‌سازی ایمیل (حالت حریم خصوصی)'}" style="background:none;border:none;cursor:pointer;font-size:10px;padding:0;line-height:1;color:${theme.subText};opacity:0.75;transition:opacity 0.2s ease;">
+              <span data-font="en" style="font-size:10px;color:${theme.subText};opacity:0.85;font-family:${fontEn};">${displayEmail}</span>
+              <button id="aqm-privacy-btn" type="button" title="${isPrivacyMode ? 'نمایش ایمیل' : 'مخفی‌سازی ایمیل'}" style="background:none;border:none;cursor:pointer;font-size:9.5px;padding:0;line-height:1;color:${theme.subText};opacity:0.75;transition:opacity 0.2s ease;">
                 ${isPrivacyMode ? '🔒' : '👁'}
               </button>
             </div>
@@ -1849,203 +1708,49 @@
         </div>
 
         <div style="display:flex;align-items:center;gap:6px;">
-          <!-- Segmented Toggle -->
-          <div style="display:flex;padding:2px;border-radius:9999px;background:rgba(0,0,0,0.25);border:1px solid ${theme.itemBorder};backdrop-filter:blur(10px);">
-            <button id="aqm-mode-rem-btn" type="button" data-font="fa" style="background:${isRem ? theme.accentGrad : 'transparent'};color:${isRem ? (theme.isDark ? '#0b111e' : '#ffffff') : theme.subText};border:none;padding:2.5px 8px;border-radius:9999px;font-size:10px;font-weight:700;cursor:pointer;transition:all 0.2s ease;font-family:${fontFa};">مانده</button>
-            <button id="aqm-mode-used-btn" type="button" data-font="fa" style="background:${!isRem ? theme.accentGrad : 'transparent'};color:${!isRem ? (theme.isDark ? '#0b111e' : '#ffffff') : theme.subText};border:none;padding:2.5px 8px;border-radius:9999px;font-size:10px;font-weight:700;cursor:pointer;transition:all 0.2s ease;font-family:${fontFa};">مصرف</button>
-          </div>
-
-          <!-- Theme Trigger -->
-          <button id="aqm-theme-menu-trigger" type="button" data-font="fa" title="گالری تم‌ها و پوسته‌ها" style="display:flex;align-items:center;gap:4px;height:24px;padding:0 8px;border-radius:9999px;background:${theme.itemBg};border:1px solid ${theme.itemBorder};color:${theme.textColor};font-size:10.5px;font-weight:600;cursor:pointer;transition:all 0.2s ease;font-family:${fontFa};user-select:none;">
-            <span style="color:${theme.accent};">${SVGS.palette}</span>
-            <span style="font-size:10px;opacity:0.95;">پوسته</span>
-            <span style="font-size:7.5px;opacity:0.6;">▼</span>
-          </button>
-
-          <!-- Account Switcher Trigger -->
-          <button id="aqm-account-switcher-trigger" type="button" data-font="fa" title="سوئیچ اکانت و مهاجرت پروژه‌ها" style="display:flex;align-items:center;gap:4px;height:24px;padding:0 8px;border-radius:9999px;background:${theme.itemBg};border:1px solid ${theme.itemBorder};color:${theme.textColor};font-size:10.5px;font-weight:600;cursor:pointer;transition:all 0.2s ease;font-family:${fontFa};user-select:none;">
-            <span style="color:${theme.accent};">⚡️</span>
-            <span style="font-size:10px;opacity:0.95;">سوئیچ</span>
-          </button>
-
-          <!-- Refresh Action -->
           <button id="aqm-refresh-btn" type="button" title="همگام‌سازی لحظه‌ای سهمیه" style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:${theme.itemBg};border:1px solid ${theme.itemBorder};color:${theme.accent};cursor:pointer;transition:all 0.2s ease;">
             <span class="${isRefreshing ? 'aqm-rotating' : ''}">${SVGS.refresh}</span>
           </button>
-
-          <!-- Close Button -->
           <button id="aqm-close-btn" type="button" title="بستن پنجره" style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:${theme.itemBg};border:1px solid ${theme.itemBorder};color:${theme.subText};font-size:10.5px;cursor:pointer;transition:all 0.2s ease;">
             ✕
           </button>
         </div>
       </div>
-
-      <!-- Luxury Floating Theme Drawer (Side-by-side or boundary clamped) -->
-      <div id="aqm-theme-dropdown" style="display:${wasDrawerOpen ? 'block' : 'none'};position:absolute;top:0;bottom:0;left:calc(100% + 14px);width:335px;height:100%;box-sizing:border-box;overflow-y:auto;padding:14px;border-radius:24px;background:${theme.isDark ? 'rgba(11, 15, 25, 0.98)' : 'rgba(255, 255, 255, 0.98)'};border:1px solid ${theme.cardBorder};box-shadow:0 24px 60px rgba(0,0,0,0.65), 0 0 20px ${theme.chipBg};backdrop-filter:blur(32px);-webkit-backdrop-filter:blur(32px);z-index:1000000;direction:rtl;" class="aqm-custom-scroll">
-          <div data-font="fa" style="font-size:11.5px;font-weight:800;color:${theme.textColor};margin-bottom:8px;padding:0 4px;display:flex;justify-content:space-between;align-items:center;font-family:${fontFa};">
-            <span>پالت‌های اختصاصی</span>
-            <span style="font-size:9px;color:${theme.subText};padding:1px 6px;border-radius:9999px;background:${theme.chipBg};">۶ سبک منحصربفرد</span>
-          </div>
-          <div style="display:flex;flex-direction:column;gap:3px;max-height:170px;overflow-y:auto;" class="aqm-custom-scroll">
-            ${themeCardsHtml}
-          </div>
-
-          <!-- Typography Customizer Section -->
-          <div style="margin:9px 0 7px 0;border-top:1px solid ${theme.itemBorder};padding-top:7px;">
-            <div data-font="fa" style="font-size:11px;font-weight:800;color:${theme.textColor};margin-bottom:6px;padding:0 2px;display:flex;justify-content:space-between;align-items:center;font-family:${fontFa};">
-              <span>تایپوگرافی و فونت</span>
-              <span data-font="en" style="font-size:8.5px;color:${theme.accent};font-family:${fontEn};">Persian & English</span>
-            </div>
-
-            <!-- English Font selector -->
-            <div style="margin-bottom:7px;">
-              <div data-font="fa" style="font-size:9.5px;color:${theme.subText};margin-bottom:3px;font-family:${fontFa};">فونت انگلیسی و کد:</div>
-              <div style="display:flex;gap:3px;flex-wrap:wrap;">
-                ${BUILTIN_FONTS_EN.map(item => `
-                  <button type="button" data-font-en="${item.id}" style="background:${customFontEn === item.id ? theme.accentGrad : 'rgba(255,255,255,0.06)'};color:${customFontEn === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.textColor};border:1px solid ${customFontEn === item.id ? theme.cardBorder : 'rgba(255,255,255,0.08)'};padding:2px 6px;border-radius:6px;font-size:9px;font-weight:700;cursor:pointer;transition:all 0.15s ease;font-family:${item.id === 'default' ? fontFa : `'${item.id}', sans-serif`};">
-                    ${item.label}
-                  </button>
-                `).join('')}
-                ${importedEn.map(item => `
-                  <div style="display:inline-flex;align-items:center;background:${customFontEn === item.id ? theme.accentGrad : 'rgba(255,255,255,0.06)'};border:1px solid ${customFontEn === item.id ? theme.cardBorder : 'rgba(255,255,255,0.08)'};border-radius:6px;padding:2px 3px 2px 6px;gap:3px;">
-                    <button type="button" data-font-en="${item.id}" style="background:none;border:none;color:${customFontEn === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.textColor};font-size:9px;font-weight:700;cursor:pointer;padding:0;font-family:'${item.id}', sans-serif;">
-                      ${item.name}
-                    </button>
-                    <button type="button" data-delete-imported-font="${item.id}" title="حذف فونت" style="background:none;border:none;color:${customFontEn === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.subText};cursor:pointer;font-size:9.5px;padding:0 1px;line-height:1;opacity:0.75;">✕</button>
-                  </div>
-                `).join('')}
-              </div>
-            </div>
-
-            <!-- Persian Font selector -->
-            <div>
-              <div data-font="fa" style="font-size:9.5px;color:${theme.subText};margin-bottom:3px;font-family:${fontFa};">فونت فارسی و توضیحات:</div>
-              <div style="display:flex;gap:3px;flex-wrap:wrap;">
-                ${BUILTIN_FONTS_FA.map(item => `
-                  <button type="button" data-font-fa="${item.id}" style="background:${customFontFa === item.id ? theme.accentGrad : 'rgba(255,255,255,0.06)'};color:${customFontFa === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.textColor};border:1px solid ${customFontFa === item.id ? theme.cardBorder : 'rgba(255,255,255,0.08)'};padding:2px 7px;border-radius:6px;font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.15s ease;font-family:${item.id === 'default' ? fontFa : `'${item.id}', sans-serif`};">
-                    ${item.label}
-                  </button>
-                `).join('')}
-                ${importedFa.map(item => `
-                  <div style="display:inline-flex;align-items:center;background:${customFontFa === item.id ? theme.accentGrad : 'rgba(255,255,255,0.06)'};border:1px solid ${customFontFa === item.id ? theme.cardBorder : 'rgba(255,255,255,0.08)'};border-radius:6px;padding:2px 3px 2px 7px;gap:3px;">
-                    <button type="button" data-font-fa="${item.id}" style="background:none;border:none;color:${customFontFa === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.textColor};font-size:9.5px;font-weight:700;cursor:pointer;padding:0;font-family:'${item.id}', sans-serif;">
-                      ${item.name}
-                    </button>
-                    <button type="button" data-delete-imported-font="${item.id}" title="حذف فونت" style="background:none;border:none;color:${customFontFa === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.subText};cursor:pointer;font-size:9.5px;padding:0 1px;line-height:1;opacity:0.75;">✕</button>
-                  </div>
-                `).join('')}
-              </div>
-            </div>
-
-            <!-- Custom Font Import Section -->
-            <div style="margin-top:7px;padding-top:6px;border-top:1px dashed ${theme.itemBorder};">
-              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
-                <span data-font="fa" style="font-size:9.5px;font-weight:700;color:${theme.textColor};font-family:${fontFa};">ایمپورت فونت سفارشی</span>
-                <button id="aqm-toggle-import-btn" type="button" style="background:${theme.chipBg};border:1px solid ${theme.itemBorder};border-radius:6px;color:${theme.accent};font-size:9px;font-weight:700;cursor:pointer;padding:2px 6px;font-family:${fontFa};">
-                  ${isImportFormOpen ? 'بستن فرم ▲' : '➕ افزودن فونت'}
-                </button>
-              </div>
-
-              <div id="aqm-import-form" style="display:${isImportFormOpen ? 'flex' : 'none'};flex-direction:column;gap:5px;background:${theme.isDark ? 'rgba(0,0,0,0.3)' : 'rgba(0,0,0,0.04)'};padding:8px;border-radius:10px;border:1px solid ${theme.itemBorder};margin-bottom:4px;">
-                <div>
-                  <input id="aqm-import-name" type="text" placeholder="نام دقیق فونت (مثلاً IRANSansX یا Dana)" style="width:100%;box-sizing:border-box;background:${theme.isDark ? 'rgba(255,255,255,0.06)' : '#ffffff'};border:1px solid ${theme.itemBorder};border-radius:6px;padding:4px 7px;font-size:9.5px;color:${theme.textColor};outline:none;font-family:${fontFa};direction:rtl;" />
-                </div>
-                <div>
-                  <input id="aqm-import-url" type="text" placeholder="لینک وب‌فونت یا CSS (اختیاری برای فونت ویندوز)" style="width:100%;box-sizing:border-box;background:${theme.isDark ? 'rgba(255,255,255,0.06)' : '#ffffff'};border:1px solid ${theme.itemBorder};border-radius:6px;padding:4px 7px;font-size:9px;color:${theme.textColor};outline:none;font-family:'JetBrains Mono',monospace;direction:ltr;" />
-                </div>
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px;">
-                  <div style="display:flex;gap:8px;font-size:9px;color:${theme.subText};align-items:center;">
-                    <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-family:${fontFa};">
-                      <input type="radio" name="aqm-import-type" value="fa" checked style="accent-color:${theme.accent};" />
-                      فارسی
-                    </label>
-                    <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-family:${fontFa};">
-                      <input type="radio" name="aqm-import-type" value="en" style="accent-color:${theme.accent};" />
-                      انگلیسی
-                    </label>
-                  </div>
-                  <button id="aqm-import-submit-btn" type="button" style="background:${theme.accentGrad};color:${theme.isDark ? '#060d13' : '#ffffff'};border:none;border-radius:6px;padding:3.5px 10px;font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;box-shadow:${theme.accentGlow};font-family:${fontFa};">
-                    افزودن و اعمال
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div style="margin:8px 0;border-top:1px solid ${theme.itemBorder};"></div>
-          <!-- Full Workspace Theming Toggle -->
-          <div id="aqm-full-app-toggle-row" style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;cursor:pointer;border-radius:10px;user-select:none;background:${theme.isDark ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.03)'};">
-            <div style="display:flex;flex-direction:column;">
-              <span data-font="fa" style="font-size:10.5px;font-weight:700;color:${theme.textColor};font-family:${fontFa};">پوسته سراسری ادیتور</span>
-              <span data-font="fa" style="font-size:8.5px;color:${theme.subText};margin-top:1px;font-family:${fontFa};">هماهنگی رنگ کل پنجره با پوسته انتخابی</span>
-            </div>
-            <div id="aqm-full-app-switch" style="width:32px;height:18px;border-radius:9999px;background:${isFullAppThemingEnabled ? theme.accent : (theme.isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.18)')};position:relative;transition:all 0.2s ease;">
-              <div style="width:14px;height:14px;border-radius:50%;background:#ffffff;position:absolute;top:2px;${isFullAppThemingEnabled ? 'left:2px;' : 'right:2px;'};transition:all 0.2s cubic-bezier(0.16,1,0.3,1);box-shadow:0 1px 4px rgba(0,0,0,0.35);"></div>
-            </div>
-          </div>
-
-          <!-- Smart RTL & Persian Suite Section -->
-          <div style="margin:8px 0;border-top:1px solid ${theme.itemBorder};padding-top:7px;">
-            <div data-font="fa" style="font-size:11px;font-weight:800;color:${theme.textColor};margin-bottom:6px;padding:0 2px;display:flex;justify-content:space-between;align-items:center;font-family:${fontFa};">
-              <span>پشتیبانی راست‌چین و فارسی (Smart RTL)</span>
-              <span style="font-size:8.5px;color:${theme.accent};font-family:'JetBrains Mono',monospace;">Alt + R</span>
-            </div>
-
-            <!-- RTL Auto Direction Toggle Row -->
-            <div id="aqm-rtl-toggle-row" style="display:flex;justify-content:space-between;align-items:center;padding:5px 7px;cursor:pointer;border-radius:8px;user-select:none;background:${theme.isDark ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.03)'};margin-bottom:4px;">
-              <div style="display:flex;flex-direction:column;">
-                <span data-font="fa" style="font-size:10px;font-weight:700;color:${theme.textColor};font-family:${fontFa};">راست‌چین هوشمند</span>
-                <span data-font="fa" style="font-size:8.5px;color:${theme.subText};font-family:${fontFa};">تنظیم خودکار جهت پاراگراف‌ها بر اساس زبان</span>
-              </div>
-              <div style="width:30px;height:17px;border-radius:9999px;background:${rtlConfig.isRTL ? theme.accent : (theme.isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.18)')};position:relative;transition:all 0.2s ease;">
-                <div style="width:13px;height:13px;border-radius:50%;background:#ffffff;position:absolute;top:2px;${rtlConfig.isRTL ? 'left:2px;' : 'right:2px;'};transition:all 0.2s cubic-bezier(0.16,1,0.3,1);box-shadow:0 1px 3px rgba(0,0,0,0.35);"></div>
-              </div>
-            </div>
-
-            <!-- Force RTL Toggle Row -->
-            <div id="aqm-rtl-force-row" style="display:flex;justify-content:space-between;align-items:center;padding:5px 7px;cursor:pointer;border-radius:8px;user-select:none;background:${theme.isDark ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.03)'};margin-bottom:4px;">
-              <div style="display:flex;flex-direction:column;">
-                <span data-font="fa" style="font-size:10px;font-weight:700;color:${theme.textColor};font-family:${fontFa};">اجبار راست‌چین (Force RTL)</span>
-                <span data-font="fa" style="font-size:8.5px;color:${theme.subText};font-family:${fontFa};">راست‌چین کامل تمام پیام‌ها و چت‌ها</span>
-              </div>
-              <div style="width:30px;height:17px;border-radius:9999px;background:${rtlConfig.forceRTL ? theme.accent : (theme.isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.18)')};position:relative;transition:all 0.2s ease;">
-                <div style="width:13px;height:13px;border-radius:50%;background:#ffffff;position:absolute;top:2px;${rtlConfig.forceRTL ? 'left:2px;' : 'right:2px;'};transition:all 0.2s cubic-bezier(0.16,1,0.3,1);box-shadow:0 1px 3px rgba(0,0,0,0.35);"></div>
-              </div>
-            </div>
-
-            <!-- Fix @ Key Toggle Row -->
-            <div id="aqm-rtl-at-row" style="display:flex;justify-content:space-between;align-items:center;padding:5px 7px;cursor:pointer;border-radius:8px;user-select:none;background:${theme.isDark ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.03)'};margin-bottom:6px;">
-              <div style="display:flex;flex-direction:column;">
-                <span data-font="fa" style="font-size:10px;font-weight:700;color:${theme.textColor};font-family:${fontFa};">اصلاح کلید @ با Shift+2</span>
-                <span data-font="fa" style="font-size:8.5px;color:${theme.subText};font-family:${fontFa};">تایپ @ به جای کاما در کیبورد فارسی</span>
-              </div>
-              <div style="width:30px;height:17px;border-radius:9999px;background:${rtlConfig.fixAtSign ? theme.accent : (theme.isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.18)')};position:relative;transition:all 0.2s ease;">
-                <div style="width:13px;height:13px;border-radius:50%;background:#ffffff;position:absolute;top:2px;${rtlConfig.fixAtSign ? 'left:2px;' : 'right:2px;'};transition:all 0.2s cubic-bezier(0.16,1,0.3,1);box-shadow:0 1px 3px rgba(0,0,0,0.35);"></div>
-              </div>
-            </div>
-
-            <!-- Line Height & Font Size Controls -->
-            <div style="display:flex;gap:6px;background:${theme.isDark ? 'rgba(0,0,0,0.25)' : 'rgba(0,0,0,0.03)'};padding:6px 8px;border-radius:8px;border:1px solid ${theme.itemBorder};">
-              <div style="flex:1;">
-                <div style="display:flex;justify-content:space-between;font-size:9px;color:${theme.subText};margin-bottom:3px;font-family:${fontFa};">
-                  <span>فاصله خطوط:</span>
-                  <span style="font-family:'JetBrains Mono',monospace;color:${theme.textColor};">${rtlConfig.lineHeight}</span>
-                </div>
-                <input id="aqm-rtl-lh-slider" type="range" min="1.2" max="2.4" step="0.1" value="${rtlConfig.lineHeight}" style="width:100%;accent-color:${theme.accent};cursor:pointer;height:3px;" />
-              </div>
-              <div style="flex:1;">
-                <div style="display:flex;justify-content:space-between;font-size:9px;color:${theme.subText};margin-bottom:3px;font-family:${fontFa};">
-                  <span>اندازه قلم:</span>
-                  <span style="font-family:'JetBrains Mono',monospace;color:${theme.textColor};">${rtlConfig.fontSize}px</span>
-                </div>
-                <input id="aqm-rtl-fs-slider" type="range" min="12" max="22" step="1" value="${rtlConfig.fontSize}" style="width:100%;accent-color:${theme.accent};cursor:pointer;height:3px;" />
-              </div>
-            </div>
-          </div>
+      <!-- 2. Fast Account Switcher Bar -->
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid ${theme.itemBorder};direction:rtl;">
+        <div style="display:flex;align-items:center;gap:5px;overflow-x:auto;max-width:300px;" class="aqm-custom-scroll">
+          <span data-font="fa" style="font-size:9.5px;color:${theme.subText};font-weight:600;white-space:nowrap;font-family:${fontFa};">سوئیچ سریع:</span>
+          ${quickSwitchChipsHtml}
         </div>
+        <button id="aqm-account-switcher-trigger" type="button" data-font="fa" title="مدیریت کامل حساب‌ها و مهاجرت گفتگوها" style="display:inline-flex;align-items:center;gap:4px;padding:2.5px 8px;border-radius:7px;background:${theme.itemBg};border:1px solid ${theme.itemBorder};color:${theme.accent};font-size:9.5px;font-weight:700;cursor:pointer;white-space:nowrap;transition:all 0.15s ease;font-family:${fontFa};">
+          <span>⚡️ مدیریت حساب‌ها</span>
+        </button>
       </div>
 
-      <!-- Hero HUD Card: Decluttered, Pure & Minimal -->
+      <!-- 3. Unified 3-Tab Bar -->
+      <div style="display:flex;padding:2px;border-radius:10px;background:rgba(0,0,0,0.28);border:1px solid ${theme.itemBorder};margin:8px 0 9px 0;direction:rtl;">
+        <button id="aqm-tab-btn-quota" type="button" data-font="fa" style="flex:1;padding:4px 0;border:none;border-radius:7px;background:${activePopoverTab === 'quota' ? theme.accentGrad : 'transparent'};color:${activePopoverTab === 'quota' ? (theme.isDark ? '#080d16' : '#ffffff') : theme.subText};font-size:10.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;font-family:${fontFa};display:flex;align-items:center;justify-content:center;gap:4px;">
+          <span>📊</span><span>سهمیه و مدل‌ها</span>
+        </button>
+        <button id="aqm-tab-btn-fonts" type="button" data-font="fa" style="flex:1;padding:4px 0;border:none;border-radius:7px;background:${activePopoverTab === 'fonts' ? theme.accentGrad : 'transparent'};color:${activePopoverTab === 'fonts' ? (theme.isDark ? '#080d16' : '#ffffff') : theme.subText};font-size:10.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;font-family:${fontFa};display:flex;align-items:center;justify-content:center;gap:4px;">
+          <span>🔤</span><span>فونت و تایپوگرافی</span>
+        </button>
+        <button id="aqm-tab-btn-rtl" type="button" data-font="fa" style="flex:1;padding:4px 0;border:none;border-radius:7px;background:${activePopoverTab === 'rtl' ? theme.accentGrad : 'transparent'};color:${activePopoverTab === 'rtl' ? (theme.isDark ? '#080d16' : '#ffffff') : theme.subText};font-size:10.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;font-family:${fontFa};display:flex;align-items:center;justify-content:center;gap:4px;">
+          <span>✍️</span><span>راست‌چین هوشمند</span>
+        </button>
+      </div>
+
+      <!-- Tab Content Area -->
+      <div style="max-height:360px;overflow-y:auto;padding-right:2px;" class="aqm-custom-scroll">
+        <!-- TAB 1: Quota & Models -->
+        <div id="aqm-tab-content-quota" style="display:${activePopoverTab === 'quota' ? 'block' : 'none'};">
+          <div style="display:flex;justify-content:flex-end;margin-bottom:6px;">
+            <div style="display:flex;padding:2px;border-radius:9999px;background:rgba(0,0,0,0.25);border:1px solid ${theme.itemBorder};">
+              <button id="aqm-mode-rem-btn" type="button" data-font="fa" style="background:${isRem ? theme.accentGrad : 'transparent'};color:${isRem ? (theme.isDark ? '#0b111e' : '#ffffff') : theme.subText};border:none;padding:2px 7px;border-radius:9999px;font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;font-family:${fontFa};">مانده</button>
+              <button id="aqm-mode-used-btn" type="button" data-font="fa" style="background:${!isRem ? theme.accentGrad : 'transparent'};color:${!isRem ? (theme.isDark ? '#0b111e' : '#ffffff') : theme.subText};border:none;padding:2px 7px;border-radius:9999px;font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;font-family:${fontFa};">مصرف</button>
+            </div>
+          </div>
+<!-- Hero HUD Card: Decluttered, Pure & Minimal -->
       <div style="margin-top:13px;padding:14px 16px;border-radius:16px;background:${theme.itemBg};border:1px solid ${theme.itemBorder};box-shadow:inset 0 1px 1px rgba(255,255,255,0.08);">
         <div style="display:flex;justify-content:space-between;align-items:center;direction:ltr;">
           <!-- Left: Label & Reset time -->
@@ -2106,7 +1811,176 @@
       <!-- Divider -->
       <div style="margin-top:13px;border-top:1px solid ${theme.itemBorder};"></div>
 
-      <!-- Luxury Footer -->
+              </div>
+
+        <!-- TAB 2: Fonts & Typography -->
+        <div id="aqm-tab-content-fonts" style="display:${activePopoverTab === 'fonts' ? 'block' : 'none'};direction:rtl;">
+<!-- Typography Customizer Section -->
+          <div style="margin:9px 0 7px 0;border-top:1px solid ${theme.itemBorder};padding-top:7px;">
+            <div data-font="fa" style="font-size:11px;font-weight:800;color:${theme.textColor};margin-bottom:6px;padding:0 2px;display:flex;justify-content:space-between;align-items:center;font-family:${fontFa};">
+              <span>تایپوگرافی و فونت</span>
+              <span data-font="en" style="font-size:8.5px;color:${theme.accent};font-family:${fontEn};">Persian & English</span>
+            </div>
+
+            <!-- English Font selector -->
+            <div style="margin-bottom:7px;">
+              <div data-font="fa" style="font-size:9.5px;color:${theme.subText};margin-bottom:3px;font-family:${fontFa};">فونت انگلیسی و کد:</div>
+              <div style="display:flex;gap:3px;flex-wrap:wrap;">
+                ${BUILTIN_FONTS_EN.map(item => `
+                  <button type="button" data-font-en="${item.id}" style="background:${customFontEn === item.id ? theme.accentGrad : 'rgba(255,255,255,0.06)'};color:${customFontEn === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.textColor};border:1px solid ${customFontEn === item.id ? theme.cardBorder : 'rgba(255,255,255,0.08)'};padding:2px 6px;border-radius:6px;font-size:9px;font-weight:700;cursor:pointer;transition:all 0.15s ease;font-family:${item.id === 'default' ? fontFa : `'${item.id}', sans-serif`};">
+                    ${item.label}
+                  </button>
+                `).join('')}
+                ${importedEn.map(item => `
+                  <div style="display:inline-flex;align-items:center;background:${customFontEn === item.id ? theme.accentGrad : 'rgba(255,255,255,0.06)'};border:1px solid ${customFontEn === item.id ? theme.cardBorder : 'rgba(255,255,255,0.08)'};border-radius:6px;padding:2px 3px 2px 6px;gap:3px;">
+                    <button type="button" data-font-en="${item.id}" style="background:none;border:none;color:${customFontEn === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.textColor};font-size:9px;font-weight:700;cursor:pointer;padding:0;font-family:'${item.id}', sans-serif;">
+                      ${item.data ? '📁 ' : ''}${item.name}
+                    </button>
+                    <button type="button" data-delete-imported-font="${item.id}" title="حذف فونت" style="background:none;border:none;color:${customFontEn === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.subText};cursor:pointer;font-size:9.5px;padding:0 1px;line-height:1;opacity:0.75;">✕</button>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+
+            <!-- Persian Font selector -->
+            <div>
+              <div data-font="fa" style="font-size:9.5px;color:${theme.subText};margin-bottom:3px;font-family:${fontFa};">فونت فارسی و توضیحات:</div>
+              <div style="display:flex;gap:3px;flex-wrap:wrap;">
+                ${BUILTIN_FONTS_FA.map(item => `
+                  <button type="button" data-font-fa="${item.id}" style="background:${customFontFa === item.id ? theme.accentGrad : 'rgba(255,255,255,0.06)'};color:${customFontFa === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.textColor};border:1px solid ${customFontFa === item.id ? theme.cardBorder : 'rgba(255,255,255,0.08)'};padding:2px 7px;border-radius:6px;font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.15s ease;font-family:${item.id === 'default' ? fontFa : `'${item.id}', sans-serif`};">
+                    ${item.label}
+                  </button>
+                `).join('')}
+                ${importedFa.map(item => `
+                  <div style="display:inline-flex;align-items:center;background:${customFontFa === item.id ? theme.accentGrad : 'rgba(255,255,255,0.06)'};border:1px solid ${customFontFa === item.id ? theme.cardBorder : 'rgba(255,255,255,0.08)'};border-radius:6px;padding:2px 3px 2px 7px;gap:3px;">
+                    <button type="button" data-font-fa="${item.id}" style="background:none;border:none;color:${customFontFa === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.textColor};font-size:9.5px;font-weight:700;cursor:pointer;padding:0;font-family:'${item.id}', sans-serif;">
+                      ${item.data ? '📁 ' : ''}${item.name}
+                    </button>
+                    <button type="button" data-delete-imported-font="${item.id}" title="حذف فونت" style="background:none;border:none;color:${customFontFa === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.subText};cursor:pointer;font-size:9.5px;padding:0 1px;line-height:1;opacity:0.75;">✕</button>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+
+            <!-- Custom Font Import Section -->
+            <div style="margin-top:7px;padding-top:6px;border-top:1px dashed ${theme.itemBorder};">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+                <span data-font="fa" style="font-size:9.5px;font-weight:700;color:${theme.textColor};font-family:${fontFa};">ایمپورت فونت سفارشی</span>
+                <button id="aqm-toggle-import-btn" type="button" style="background:${theme.chipBg};border:1px solid ${theme.itemBorder};border-radius:6px;color:${theme.accent};font-size:9px;font-weight:700;cursor:pointer;padding:2px 6px;font-family:${fontFa};">
+                  ${isImportFormOpen ? 'بستن فرم ▲' : '➕ افزودن فونت'}
+                </button>
+              </div>
+
+              <div id="aqm-import-form" style="display:${isImportFormOpen ? 'flex' : 'none'};flex-direction:column;gap:5px;background:${theme.isDark ? 'rgba(0,0,0,0.3)' : 'rgba(0,0,0,0.04)'};padding:8px;border-radius:10px;border:1px solid ${theme.itemBorder};margin-bottom:4px;">
+                <!-- Local Font File Upload Button -->
+                <div>
+                  <input id="aqm-import-file" type="file" accept=".woff2,.woff,.ttf,.otf" style="display:none;" />
+                  <label for="aqm-import-file" id="aqm-import-file-label" style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:5px 8px;border-radius:7px;background:${theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)'};border:1px dashed ${stagedFontFile ? '#10b981' : theme.itemBorder};color:${stagedFontFile ? '#10b981' : theme.accent};font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.15s ease;font-family:${fontFa};user-select:none;">
+                    <span style="display:flex;align-items:center;gap:6px;">
+                      <span style="font-size:11px;">📁</span>
+                      <span id="aqm-import-file-text">${stagedFontFile ? `✓ ${stagedFontFile.fileName} (${stagedFontFile.sizeKb} KB)` : 'انتخاب یا آپلود فایل فونت (TTF, WOFF2, OTF)'}</span>
+                    </span>
+                    <span id="aqm-import-file-badge" style="font-size:8px;padding:1px 5px;border-radius:4px;background:${stagedFontFile ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.08)'};color:${stagedFontFile ? '#10b981' : theme.subText};font-family:'JetBrains Mono',monospace;">${stagedFontFile ? stagedFontFile.format.toUpperCase() : 'فایل محلی'}</span>
+                  </label>
+                </div>
+
+                <div style="display:flex;align-items:center;gap:5px;font-size:8px;color:${theme.subText};margin:1px 0;font-family:${fontFa};">
+                  <div style="flex:1;height:1px;background:${theme.itemBorder};opacity:0.6;"></div>
+                  <span>یا وارد کردن نام فونت / لینک وب‌فونت</span>
+                  <div style="flex:1;height:1px;background:${theme.itemBorder};opacity:0.6;"></div>
+                </div>
+
+                <div>
+                  <input id="aqm-import-name" type="text" value="${stagedFontFile ? stagedFontFile.name : ''}" placeholder="نام فونت (مثلاً IRANSansX یا Dana)" style="width:100%;box-sizing:border-box;background:${theme.isDark ? 'rgba(255,255,255,0.06)' : '#ffffff'};border:1px solid ${theme.itemBorder};border-radius:6px;padding:4px 7px;font-size:9.5px;color:${theme.textColor};outline:none;font-family:${fontFa};direction:rtl;" />
+                </div>
+                <div>
+                  <input id="aqm-import-url" type="text" placeholder="لینک وب‌فونت یا CSS (اختیاری اگر فایل یا فونت سیستم دارید)" style="width:100%;box-sizing:border-box;background:${theme.isDark ? 'rgba(255,255,255,0.06)' : '#ffffff'};border:1px solid ${theme.itemBorder};border-radius:6px;padding:4px 7px;font-size:9px;color:${theme.textColor};outline:none;font-family:'JetBrains Mono',monospace;direction:ltr;" />
+                </div>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px;">
+                  <div style="display:flex;gap:8px;font-size:9px;color:${theme.subText};align-items:center;">
+                    <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-family:${fontFa};">
+                      <input type="radio" name="aqm-import-type" value="fa" checked style="accent-color:${theme.accent};" />
+                      فارسی
+                    </label>
+                    <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-family:${fontFa};">
+                      <input type="radio" name="aqm-import-type" value="en" style="accent-color:${theme.accent};" />
+                      انگلیسی
+                    </label>
+                  </div>
+                  <button id="aqm-import-submit-btn" type="button" style="background:${theme.accentGrad};color:${theme.isDark ? '#060d13' : '#ffffff'};border:none;border-radius:6px;padding:3.5px 10px;font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;box-shadow:${theme.accentGlow};font-family:${fontFa};">
+                    افزودن و اعمال
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+                            </div>
+
+        <!-- TAB 3: Smart RTL Suite -->
+        <div id="aqm-tab-content-rtl" style="display:${activePopoverTab === 'rtl' ? 'block' : 'none'};direction:rtl;">
+<!-- Smart RTL & Persian Suite Section -->
+          <div style="margin:8px 0;border-top:1px solid ${theme.itemBorder};padding-top:7px;">
+            <div data-font="fa" style="font-size:11px;font-weight:800;color:${theme.textColor};margin-bottom:6px;padding:0 2px;display:flex;justify-content:space-between;align-items:center;font-family:${fontFa};">
+              <span>پشتیبانی راست‌چین و فارسی (Smart RTL)</span>
+              <span style="font-size:8.5px;color:${theme.accent};font-family:'JetBrains Mono',monospace;">Alt + R</span>
+            </div>
+
+            <!-- RTL Auto Direction Toggle Row -->
+            <div id="aqm-rtl-toggle-row" style="display:flex;justify-content:space-between;align-items:center;padding:5px 7px;cursor:pointer;border-radius:8px;user-select:none;background:${theme.isDark ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.03)'};margin-bottom:4px;">
+              <div style="display:flex;flex-direction:column;">
+                <span data-font="fa" style="font-size:10px;font-weight:700;color:${theme.textColor};font-family:${fontFa};">راست‌چین هوشمند</span>
+                <span data-font="fa" style="font-size:8.5px;color:${theme.subText};font-family:${fontFa};">تنظیم خودکار جهت پاراگراف‌ها بر اساس زبان</span>
+              </div>
+              <div style="width:30px;height:17px;border-radius:9999px;background:${rtlConfig.isRTL ? theme.accent : (theme.isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.18)')};position:relative;transition:all 0.2s ease;">
+                <div style="width:13px;height:13px;border-radius:50%;background:#ffffff;position:absolute;top:2px;${rtlConfig.isRTL ? 'left:2px;' : 'right:2px;'};transition:all 0.2s cubic-bezier(0.16,1,0.3,1);box-shadow:0 1px 3px rgba(0,0,0,0.35);"></div>
+              </div>
+            </div>
+
+            <!-- Force RTL Toggle Row -->
+            <div id="aqm-rtl-force-row" style="display:flex;justify-content:space-between;align-items:center;padding:5px 7px;cursor:pointer;border-radius:8px;user-select:none;background:${theme.isDark ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.03)'};margin-bottom:4px;">
+              <div style="display:flex;flex-direction:column;">
+                <span data-font="fa" style="font-size:10px;font-weight:700;color:${theme.textColor};font-family:${fontFa};">اجبار راست‌چین (Force RTL)</span>
+                <span data-font="fa" style="font-size:8.5px;color:${theme.subText};font-family:${fontFa};">راست‌چین کامل تمام پیام‌ها و چت‌ها</span>
+              </div>
+              <div style="width:30px;height:17px;border-radius:9999px;background:${rtlConfig.forceRTL ? theme.accent : (theme.isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.18)')};position:relative;transition:all 0.2s ease;">
+                <div style="width:13px;height:13px;border-radius:50%;background:#ffffff;position:absolute;top:2px;${rtlConfig.forceRTL ? 'left:2px;' : 'right:2px;'};transition:all 0.2s cubic-bezier(0.16,1,0.3,1);box-shadow:0 1px 3px rgba(0,0,0,0.35);"></div>
+              </div>
+            </div>
+
+            <!-- Fix @ Key Toggle Row -->
+            <div id="aqm-rtl-at-row" style="display:flex;justify-content:space-between;align-items:center;padding:5px 7px;cursor:pointer;border-radius:8px;user-select:none;background:${theme.isDark ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.03)'};margin-bottom:6px;">
+              <div style="display:flex;flex-direction:column;">
+                <span data-font="fa" style="font-size:10px;font-weight:700;color:${theme.textColor};font-family:${fontFa};">اصلاح کلید @ با Shift+2</span>
+                <span data-font="fa" style="font-size:8.5px;color:${theme.subText};font-family:${fontFa};">تایپ @ به جای کاما در کیبورد فارسی</span>
+              </div>
+              <div style="width:30px;height:17px;border-radius:9999px;background:${rtlConfig.fixAtSign ? theme.accent : (theme.isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.18)')};position:relative;transition:all 0.2s ease;">
+                <div style="width:13px;height:13px;border-radius:50%;background:#ffffff;position:absolute;top:2px;${rtlConfig.fixAtSign ? 'left:2px;' : 'right:2px;'};transition:all 0.2s cubic-bezier(0.16,1,0.3,1);box-shadow:0 1px 3px rgba(0,0,0,0.35);"></div>
+              </div>
+            </div>
+
+            <!-- Line Height & Font Size Controls -->
+            <div style="display:flex;gap:6px;background:${theme.isDark ? 'rgba(0,0,0,0.25)' : 'rgba(0,0,0,0.03)'};padding:6px 8px;border-radius:8px;border:1px solid ${theme.itemBorder};">
+              <div style="flex:1;">
+                <div style="display:flex;justify-content:space-between;font-size:9px;color:${theme.subText};margin-bottom:3px;font-family:${fontFa};">
+                  <span>فاصله خطوط:</span>
+                  <span style="font-family:'JetBrains Mono',monospace;color:${theme.textColor};">${rtlConfig.lineHeight}</span>
+                </div>
+                <input id="aqm-rtl-lh-slider" type="range" min="1.2" max="2.4" step="0.1" value="${rtlConfig.lineHeight}" style="width:100%;accent-color:${theme.accent};cursor:pointer;height:3px;" />
+              </div>
+              <div style="flex:1;">
+                <div style="display:flex;justify-content:space-between;font-size:9px;color:${theme.subText};margin-bottom:3px;font-family:${fontFa};">
+                  <span>اندازه قلم:</span>
+                  <span style="font-family:'JetBrains Mono',monospace;color:${theme.textColor};">${rtlConfig.fontSize}px</span>
+                </div>
+                <input id="aqm-rtl-fs-slider" type="range" min="12" max="22" step="1" value="${rtlConfig.fontSize}" style="width:100%;accent-color:${theme.accent};cursor:pointer;height:3px;" />
+              </div>
+            </div>
+          </div>        </div>
+      </div>
+
+      <!-- 4. Footer Area -->
+<!-- Luxury Footer -->
       <div style="margin-top:9px;display:flex;justify-content:space-between;align-items:center;font-size:10.5px;direction:ltr;">
         <div data-font="fa" style="display:flex;align-items:center;gap:6px;color:${theme.subText};font-size:10px;font-family:${fontFa};">
           <span style="width:5.5px;height:5.5px;border-radius:50%;background:#10b981;box-shadow:0 0 7px rgba(16,185,129,0.8);animation:aqm-pulse-dot 2s infinite ease-in-out;"></span>
@@ -2118,71 +1992,47 @@
       </div>
     `;
 
-    function updateDropdownPosition() {
-      const drop = pop.querySelector('#aqm-theme-dropdown');
-      if (!drop) return;
-      const popRect = pop.getBoundingClientRect();
-      const spaceRight = window.innerWidth - popRect.right;
-      const spaceLeft = popRect.left;
+    function updateDropdownPosition() {}
 
-      if (spaceRight >= 350) {
-        // Dock to right of HUD
-        drop.style.left = 'calc(100% + 14px)';
-        drop.style.right = 'auto';
-        drop.style.top = '0';
-        drop.style.bottom = '0';
-        drop.style.width = '335px';
-        drop.style.height = '100%';
-        drop.style.maxHeight = 'none';
-      } else if (spaceLeft >= 350) {
-        // Dock to left of HUD
-        drop.style.left = 'auto';
-        drop.style.right = 'calc(100% + 14px)';
-        drop.style.top = '0';
-        drop.style.bottom = '0';
-        drop.style.width = '335px';
-        drop.style.height = '100%';
-        drop.style.maxHeight = 'none';
-      } else {
-        // Narrow screen fallback: dock above or below with clamped height
-        drop.style.left = '0';
-        drop.style.right = '0';
-        drop.style.width = '100%';
-        if (popRect.top > 320) {
-          drop.style.top = 'auto';
-          drop.style.bottom = 'calc(100% + 12px)';
-          drop.style.height = 'auto';
-          drop.style.maxHeight = Math.max(220, popRect.top - 24) + 'px';
-        } else {
-          drop.style.top = 'calc(100% + 12px)';
-          drop.style.bottom = 'auto';
-          drop.style.height = 'auto';
-          drop.style.maxHeight = Math.max(220, window.innerHeight - popRect.bottom - 24) + 'px';
+    // Bind Tab Switching & Actions
+    const tabQuota = pop.querySelector('#aqm-tab-btn-quota');
+    const tabFonts = pop.querySelector('#aqm-tab-btn-fonts');
+    const tabRtl = pop.querySelector('#aqm-tab-btn-rtl');
+    if (tabQuota) tabQuota.onclick = (e) => { e.stopPropagation(); activePopoverTab = 'quota'; renderPopover(); };
+    if (tabFonts) tabFonts.onclick = (e) => { e.stopPropagation(); activePopoverTab = 'fonts'; renderPopover(); };
+    if (tabRtl) tabRtl.onclick = (e) => { e.stopPropagation(); activePopoverTab = 'rtl'; renderPopover(); };
+
+    pop.querySelectorAll('[data-switch-quick]').forEach(btn => {
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        const em = btn.getAttribute('data-switch-quick');
+        if (typeof window.switchAccount === 'function') {
+          window.switchAccount(em);
+        } else if (typeof switchAccount === 'function') {
+          switchAccount(em);
         }
-      }
+      };
+    });
+
+
+    // Bind Event Listeners safely
+    const closeBtn = pop.querySelector('#aqm-close-btn');
+    if (closeBtn) {
+      closeBtn.onclick = (e) => {
+        e.stopPropagation();
+        pop.style.display = 'none';
+        const d = pop.querySelector('#aqm-theme-dropdown');
+        if (d) d.style.display = 'none';
+      };
     }
 
-    // Restore drawer state if it was open
-    if (wasDrawerOpen) {
-      const d = pop.querySelector('#aqm-theme-dropdown');
-      if (d) {
-        d.style.display = 'block';
-        updateDropdownPosition();
-      }
+    const refreshBtn = pop.querySelector('#aqm-refresh-btn');
+    if (refreshBtn) {
+      refreshBtn.onclick = (e) => {
+        e.stopPropagation();
+        refreshQuota();
+      };
     }
-
-    // Bind Event Listeners
-    pop.querySelector('#aqm-close-btn').onclick = (e) => {
-      e.stopPropagation();
-      pop.style.display = 'none';
-      const d = pop.querySelector('#aqm-theme-dropdown');
-      if (d) d.style.display = 'none';
-    };
-
-    pop.querySelector('#aqm-refresh-btn').onclick = (e) => {
-      e.stopPropagation();
-      refreshQuota();
-    };
 
     const privacyBtn = pop.querySelector('#aqm-privacy-btn');
     if (privacyBtn) {
@@ -2197,36 +2047,44 @@
       };
     }
 
-    pop.querySelector('#aqm-mode-rem-btn').onclick = (e) => {
-      e.stopPropagation();
-      displayMode = 'remaining';
-      try { localStorage.setItem('antigravity:quota_mode', 'remaining'); } catch (err) {}
-      persistUserSettings({ mode: 'remaining' });
-      renderBadge();
-      renderPopover();
-    };
+    const modeRemBtn = pop.querySelector('#aqm-mode-rem-btn');
+    if (modeRemBtn) {
+      modeRemBtn.onclick = (e) => {
+        e.stopPropagation();
+        displayMode = 'remaining';
+        try { localStorage.setItem('antigravity:quota_mode', 'remaining'); } catch (err) {}
+        persistUserSettings({ mode: 'remaining' });
+        renderBadge();
+        renderPopover();
+      };
+    }
 
-    pop.querySelector('#aqm-mode-used-btn').onclick = (e) => {
-      e.stopPropagation();
-      displayMode = 'used';
-      try { localStorage.setItem('antigravity:quota_mode', 'used'); } catch (err) {}
-      persistUserSettings({ mode: 'used' });
-      renderBadge();
-      renderPopover();
-    };
+    const modeUsedBtn = pop.querySelector('#aqm-mode-used-btn');
+    if (modeUsedBtn) {
+      modeUsedBtn.onclick = (e) => {
+        e.stopPropagation();
+        displayMode = 'used';
+        try { localStorage.setItem('antigravity:quota_mode', 'used'); } catch (err) {}
+        persistUserSettings({ mode: 'used' });
+        renderBadge();
+        renderPopover();
+      };
+    }
 
     const themeMenuTrigger = pop.querySelector('#aqm-theme-menu-trigger');
     const themeDropdown = pop.querySelector('#aqm-theme-dropdown');
-    themeMenuTrigger.onclick = (e) => {
-      e.stopPropagation();
-      const isCurrentlyOpen = (themeDropdown.style.display === 'block' || themeDropdown.style.display === 'flex');
-      if (isCurrentlyOpen) {
-        themeDropdown.style.display = 'none';
-      } else {
-        themeDropdown.style.display = 'block';
-        updateDropdownPosition();
-      }
-    };
+    if (themeMenuTrigger && themeDropdown) {
+      themeMenuTrigger.onclick = (e) => {
+        e.stopPropagation();
+        const isCurrentlyOpen = (themeDropdown.style.display === 'block' || themeDropdown.style.display === 'flex');
+        if (isCurrentlyOpen) {
+          themeDropdown.style.display = 'none';
+        } else {
+          themeDropdown.style.display = 'block';
+          updateDropdownPosition();
+        }
+      };
+    }
 
     const switcherTrigger = pop.querySelector('#aqm-account-switcher-trigger');
     if (switcherTrigger) {
@@ -2238,22 +2096,15 @@
       };
     }
 
-    themeDropdown.querySelectorAll('.aqm-theme-card').forEach(item => {
-      item.onclick = (e) => {
+    const drawerCloseBtn = pop.querySelector('#aqm-drawer-close-btn');
+    if (drawerCloseBtn) {
+      drawerCloseBtn.onclick = (e) => {
         e.stopPropagation();
-        const tid = item.getAttribute('data-theme-id');
-        if (THEMES[tid]) {
-          currentThemeId = tid;
-          try { localStorage.setItem('antigravity:quota_theme', tid); } catch (err) {}
-          persistUserSettings({ theme: tid });
-          applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
-          renderBadge();
-          renderPopover();
-        }
+        if (themeDropdown) themeDropdown.style.display = 'none';
       };
-    });
+    }
 
-    themeDropdown.querySelectorAll('[data-font-en]').forEach(btn => {
+    pop.querySelectorAll('[data-font-en]').forEach(btn => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const fn = btn.getAttribute('data-font-en');
@@ -2267,7 +2118,7 @@
       };
     });
 
-    themeDropdown.querySelectorAll('[data-font-fa]').forEach(btn => {
+    pop.querySelectorAll('[data-font-fa]').forEach(btn => {
       btn.onclick = (e) => {
         e.stopPropagation();
         const fn = btn.getAttribute('data-font-fa');
@@ -2290,6 +2141,58 @@
       };
     }
 
+    const importFileInput = pop.querySelector('#aqm-import-file');
+    const importFileLabel = pop.querySelector('#aqm-import-file-label');
+    const importFileText = pop.querySelector('#aqm-import-file-text');
+    const importFileBadge = pop.querySelector('#aqm-import-file-badge');
+
+    if (importFileInput) {
+      importFileInput.onclick = (e) => e.stopPropagation();
+      importFileInput.onchange = (e) => {
+        const file = e.target.files && e.target.files[0];
+        if (!file) return;
+
+        if (file.size > 8 * 1024 * 1024) {
+          if (importFileText) importFileText.textContent = 'خطا: فایل بیشتر از ۸ مگابایت است!';
+          if (importFileLabel) importFileLabel.style.borderColor = '#ef4444';
+          return;
+        }
+
+        const fmt = getFontFormatFromFileName(file.name);
+        const suggestedName = deriveFontNameFromFile(file.name);
+        if (importNameInput && (!importNameInput.value || importNameInput.value.trim() === '')) {
+          importNameInput.value = suggestedName;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (loadEvt) => {
+          stagedFontFile = {
+            name: suggestedName,
+            fileName: file.name,
+            format: fmt,
+            sizeKb: Math.round(file.size / 1024),
+            data: loadEvt.target.result
+          };
+
+          if (importFileText) importFileText.textContent = `✓ ${file.name} (${stagedFontFile.sizeKb} KB)`;
+          if (importFileLabel) {
+            importFileLabel.style.borderColor = '#10b981';
+            importFileLabel.style.color = '#10b981';
+          }
+          if (importFileBadge) {
+            importFileBadge.textContent = fmt.toUpperCase();
+            importFileBadge.style.background = 'rgba(16, 185, 129, 0.2)';
+            importFileBadge.style.color = '#10b981';
+          }
+        };
+        reader.onerror = () => {
+          if (importFileText) importFileText.textContent = 'خطا در بارگذاری فایل!';
+          if (importFileLabel) importFileLabel.style.borderColor = '#ef4444';
+        };
+        reader.readAsDataURL(file);
+      };
+    }
+
     const importNameInput = pop.querySelector('#aqm-import-name');
     const importUrlInput = pop.querySelector('#aqm-import-url');
     if (importNameInput) {
@@ -2306,39 +2209,63 @@
       importSubmitBtn.onclick = (e) => {
         e.stopPropagation();
         const rawName = importNameInput ? importNameInput.value.trim() : '';
-        if (!rawName) {
+        const cleanName = sanitizeFontName(rawName || (stagedFontFile ? stagedFontFile.name : ''));
+        if (!cleanName) {
           if (importNameInput) {
             importNameInput.style.borderColor = '#ef4444';
-            importNameInput.placeholder = 'لطفاً نام فونت را بنویسید!';
+            importNameInput.placeholder = 'نام فونت الزامی است!';
+            importNameInput.focus();
           }
           return;
         }
         const rawUrl = importUrlInput ? importUrlInput.value.trim() : '';
-        const typeRadio = pop.querySelector('input[name="aqm-font-type"]:checked');
+        const cleanUrl = sanitizeFontUrl(rawUrl);
+        const typeRadio = pop.querySelector('input[name="aqm-import-type"]:checked') || pop.querySelector('input[name="aqm-font-type"]:checked');
         const fType = typeRadio ? typeRadio.value : 'fa';
 
-        if (!customImportedFonts.some(f => f.id.toLowerCase() === rawName.toLowerCase())) {
-          customImportedFonts.push({
-            id: rawName,
-            name: rawName,
-            url: rawUrl,
-            type: fType
-          });
-          try {
-            localStorage.setItem('antigravity:custom_imported_fonts', JSON.stringify(customImportedFonts));
-          } catch(err) {}
+        const fontEntry = {
+          id: cleanName,
+          name: cleanName,
+          url: cleanUrl,
+          type: fType
+        };
+
+        if (stagedFontFile && stagedFontFile.data) {
+          fontEntry.data = stagedFontFile.data;
+          fontEntry.format = stagedFontFile.format;
+          fontEntry.fileName = stagedFontFile.fileName;
+          fontEntry.sizeKb = stagedFontFile.sizeKb;
         }
 
-        if (rawUrl) {
-          injectImportedFontStyles();
+        const existingIdx = customImportedFonts.findIndex(f => f.id.toLowerCase() === cleanName.toLowerCase());
+        if (existingIdx >= 0) {
+          if (!fontEntry.data && customImportedFonts[existingIdx].data) {
+            fontEntry.data = customImportedFonts[existingIdx].data;
+            fontEntry.format = customImportedFonts[existingIdx].format;
+            fontEntry.fileName = customImportedFonts[existingIdx].fileName;
+            fontEntry.sizeKb = customImportedFonts[existingIdx].sizeKb;
+          }
+          customImportedFonts[existingIdx] = fontEntry;
+        } else {
+          customImportedFonts.push(fontEntry);
         }
+        try {
+          localStorage.setItem('antigravity:custom_imported_fonts', JSON.stringify(customImportedFonts));
+        } catch(err) {
+          try {
+            const light = customImportedFonts.map(f => ({ id: f.id, name: f.name, type: f.type, url: f.url, fileName: f.fileName, format: f.format, sizeKb: f.sizeKb }));
+            localStorage.setItem('antigravity:custom_imported_fonts', JSON.stringify(light));
+          } catch(e) {}
+        }
+
+        injectImportedFontStyles();
 
         if (fType === 'fa') {
-          customFontFa = rawName;
-          try { localStorage.setItem('antigravity:custom_font_fa', rawName); } catch(err){}
+          customFontFa = cleanName;
+          try { localStorage.setItem('antigravity:custom_font_fa', cleanName); } catch(err){}
         } else {
-          customFontEn = rawName;
-          try { localStorage.setItem('antigravity:custom_font_en', rawName); } catch(err){}
+          customFontEn = cleanName;
+          try { localStorage.setItem('antigravity:custom_font_en', cleanName); } catch(err){}
         }
 
         persistUserSettings({
@@ -2347,18 +2274,23 @@
           fontFa: customFontFa
         });
 
-        ensureFontLoaded(rawName);
+        ensureFontLoaded(cleanName);
         applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
+        stagedFontFile = null;
         isImportFormOpen = false;
         renderBadge();
         renderPopover();
       };
     }
 
-    themeDropdown.querySelectorAll('[data-delete-imported-font]').forEach(delBtn => {
+    pop.querySelectorAll('[data-delete-imported-font]').forEach(delBtn => {
       delBtn.onclick = (e) => {
         e.stopPropagation();
         const fid = delBtn.getAttribute('data-delete-imported-font');
+        const linkEl = document.getElementById(`aqm-cfont-${encodeURIComponent(fid.replace(/\s+/g, '-'))}`);
+        if (linkEl) linkEl.remove();
+        const styleEl = document.getElementById(`aqm-cfont-data-${encodeURIComponent(fid.replace(/\s+/g, '-'))}`);
+        if (styleEl) styleEl.remove();
         customImportedFonts = customImportedFonts.filter(f => f.id !== fid);
         try {
           localStorage.setItem('antigravity:custom_imported_fonts', JSON.stringify(customImportedFonts));
@@ -2384,17 +2316,6 @@
         renderPopover();
       };
     });
-
-    const fullAppToggleRow = pop.querySelector('#aqm-full-app-toggle-row');
-    fullAppToggleRow.onclick = (e) => {
-      e.stopPropagation();
-      isFullAppThemingEnabled = !isFullAppThemingEnabled;
-      try { localStorage.setItem('antigravity:full_app_theming', String(isFullAppThemingEnabled)); } catch (err) {}
-      persistUserSettings({ fullTheming: isFullAppThemingEnabled });
-      applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
-      renderBadge();
-      renderPopover();
-    };
 
     const rtlToggleRow = pop.querySelector('#aqm-rtl-toggle-row');
     if (rtlToggleRow) {
@@ -2504,8 +2425,8 @@
           }
         }
 
-        window.addEventListener('mousemove', onMouseMove);
-        window.addEventListener('mouseup', onMouseUp);
+        onGlobal(window, 'mousemove', onMouseMove);
+        onGlobal(window, 'mouseup', onMouseUp);
       };
 
       dragHandle.ondblclick = (e) => {
@@ -2515,7 +2436,9 @@
           localStorage.removeItem('antigravity:popover_pos');
           persistUserSettings({ popoverPos: null });
         } catch (err) {}
-        const anchor = document.getElementById('antigravity-usage-pill') || trigger;
+        const turboBtn = document.querySelector('[data-testid="permissions-selector-trigger"]') || Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('Turbo'));
+        const trigger = document.querySelector('[data-testid="model-selector-trigger"]');
+        const anchor = document.getElementById('antigravity-account-pill') || turboBtn || trigger;
         const rect = anchor.getBoundingClientRect();
         pop.style.left = Math.max(16, rect.left - 20) + 'px';
         pop.style.bottom = (window.innerHeight - rect.top + 14) + 'px';
@@ -3027,6 +2950,56 @@
     return false;
   }
 
+  function switchAccount(accKey) {
+    if (!accKey) return;
+    const isFa = (swLang === 'fa');
+    showSwitcherToast(isFa ? `در حال جابجایی به ${accKey}...` : `Switching to ${accKey}...`);
+    const payload = { accountKey: accKey, noRestart: true };
+
+    const finalizeSwitch = () => {
+      fetchSwitcherState(() => {
+        if (typeof renderBadge === 'function') renderBadge();
+        const pop = document.getElementById('antigravity-usage-popover');
+        if (pop && pop.style.display !== 'none' && typeof renderPopover === 'function') {
+          renderPopover();
+        }
+        const modal = document.getElementById('antigravity-switcher-modal');
+        if (modal && modal.classList.contains('aqm-active') && typeof renderSwitcherModal === 'function') {
+          renderSwitcherModal();
+        }
+        if (typeof refreshQuota === 'function') refreshQuota();
+      });
+    };
+
+    if (callDaemonIpc('switch', payload)) {
+      setTimeout(finalizeSwitch, 400);
+      return;
+    }
+
+    fetch('http://127.0.0.1:39281/api/switch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    })
+    .then(r => r.json())
+    .then(res => {
+      if (res && res.needs_reauth) {
+        showSwitcherToast(res.error || (isFa ? 'این حساب نیاز به ورود مجدد دارد' : 'Account requires sign-in'), true);
+        return;
+      }
+      if (res && res.success) {
+        showSwitcherToast(isFa ? `حساب به ${accKey} تغییر یافت ⚡️` : `Switched to ${accKey} ⚡️`);
+        finalizeSwitch();
+      } else {
+        showSwitcherToast((res && res.error) || (isFa ? 'خطا در جابجایی حساب' : 'Switch error'), true);
+      }
+    })
+    .catch(() => {
+      showSwitcherToast(isFa ? 'خطا در اتصال به سرویس سوئیچر' : 'Connection error', true);
+    });
+  }
+  window.switchAccount = switchAccount;
+
   window.__onSwitcherStateUpdate = function(data) {
     if (!data) return;
     const isInst2 = isInstance2Window();
@@ -3087,6 +3060,10 @@
     if (modal && modal.classList.contains('aqm-active')) {
       renderSwitcherModal();
     }
+    const pop = document.getElementById('antigravity-usage-popover');
+    if (pop && pop.style.display !== 'none' && typeof renderPopover === 'function') {
+      renderPopover();
+    }
   };
 
   window.__showSwitcherToast = showSwitcherToast;
@@ -3106,13 +3083,32 @@
   }
 
   function showSwitcherToast(msg, isError = false) {
-    const modal = document.getElementById('antigravity-switcher-modal');
-    if (!modal) return;
-    let toast = modal.querySelector('.aqm-sw-toast');
+    let container = document.getElementById('antigravity-switcher-modal');
+    let isBodyToast = false;
+    if (!container || !container.classList.contains('aqm-active')) {
+      container = document.body;
+      isBodyToast = true;
+    }
+    if (!container) return;
+    let toast = container.querySelector('.aqm-sw-toast');
     if (!toast) {
       toast = document.createElement('div');
       toast.className = 'aqm-sw-toast';
-      modal.appendChild(toast);
+      if (isBodyToast) {
+        toast.style.position = 'fixed';
+        toast.style.bottom = '28px';
+        toast.style.left = '50%';
+        toast.style.transform = 'translateX(-50%)';
+        toast.style.zIndex = '2147483647';
+        toast.style.padding = '8px 18px';
+        toast.style.borderRadius = '9999px';
+        toast.style.boxShadow = '0 8px 32px rgba(0, 0, 0, 0.5)';
+        toast.style.fontFamily = 'system-ui, -apple-system, sans-serif';
+        toast.style.fontSize = '12px';
+        toast.style.fontWeight = '600';
+        toast.style.transition = 'opacity 0.25s, transform 0.25s';
+      }
+      container.appendChild(toast);
     }
     if (typeof msg === 'string' && (msg.includes('<') && msg.includes('>'))) {
       toast.innerHTML = msg;
@@ -3124,10 +3120,14 @@
     toast.style.color = '#ffffff';
     toast.style.border = `1px solid ${isError ? 'rgba(239, 68, 68, 0.6)' : 'rgba(16, 185, 129, 0.6)'}`;
     toast.classList.add('show');
+    toast.style.opacity = '1';
     if (swToastTimeout) clearTimeout(swToastTimeout);
     const hasLink = typeof msg === 'string' && msg.includes('<a');
-    const delay = hasLink ? 35000 : 6000;
-    swToastTimeout = setTimeout(() => { toast.classList.remove('show'); }, delay);
+    const delay = hasLink ? 35000 : 5000;
+    swToastTimeout = setTimeout(() => {
+      toast.classList.remove('show');
+      if (isBodyToast) toast.style.opacity = '0';
+    }, delay);
   }
 
   window.__onOAuthUrlReady = function(url) {
@@ -3148,7 +3148,7 @@
       modal.onclick = (e) => {
         if (e.target === modal && !swIsMigrating) closeSwitcherModal();
       };
-      window.addEventListener('keydown', (e) => {
+      onGlobal(window, 'keydown', (e) => {
         if (e.key === 'Escape' && (modal.classList.contains('aqm-active') || modal.style.visibility === 'visible') && !swIsMigrating) {
           closeSwitcherModal();
         }
@@ -3196,6 +3196,7 @@
   }
 
   function renderSwitcherModal() {
+    if (swTab === 'migration') swTab = 'accounts';
     const modal = document.getElementById('antigravity-switcher-modal');
     if (!modal) return;
 
@@ -3296,11 +3297,7 @@
             <span>${t.tabTasks || 'Tasks'}</span>
             <span style="font-size:9px;padding:0 5px;border-radius:9999px;background:rgba(255,255,255,0.08);">${tasksList.length}</span>
           </button>
-          <button class="aqm-sw-tab-btn ${swTab === 'migration' ? 'active' : ''}" id="aqm-tab-btn-migration">
-            <span>⇄</span>
-            <span>${t.tabMigration || 'Migration'}</span>
-            <span style="font-size:9px;padding:0 5px;border-radius:9999px;background:rgba(255,255,255,0.08);">${(swState.conversations || []).length}</span>
-          </button>
+
         </div>
 
         <!-- Content Body (Scrollable) -->
@@ -3710,94 +3707,7 @@
                 </div>
               `}
             </div>
-          ` : `
-            <!-- MIGRATION TAB -->
-            <div style="display:flex;flex-direction:column;gap:10px;">
-              <!-- Target Account & Transfer Mode Grid -->
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                
-                <!-- Target Account -->
-                <div class="aqm-sw-card" style="padding:9px 11px;">
-                  <label style="font-size:10.5px;font-weight:700;margin-bottom:4px;display:block;color:#94a3b8;">${isFa ? 'اکانت مقصد:' : 'Target Account:'}</label>
-                  <select id="aqm-sw-target-select" style="width:100%;padding:5px 8px;border-radius:7px;background:rgba(0,0,0,0.3);border:1px solid rgba(255,255,255,0.08);color:#fff;font-size:11px;outline:none;" dir="ltr">
-                    ${savedKeys.length > 0 ? savedKeys.map(k => `
-                      <option value="${k}" ${k === swTargetAccount ? 'selected' : ''}>${swState.savedAccounts[k].email || k}</option>
-                    `).join('') : `
-                      <option value="">${isFa ? 'ابتدا یک اکانت مقصد ذخیره کنید' : 'No target accounts'}</option>
-                    `}
-                  </select>
-                </div>
-
-                <!-- Transfer Mode -->
-                <div class="aqm-sw-card" style="padding:9px 11px;">
-                  <label style="font-size:10.5px;font-weight:700;margin-bottom:4px;display:block;color:#94a3b8;">${isFa ? 'روش انتقال:' : 'Mode:'}</label>
-                  <div style="display:flex;gap:4px;">
-                    <button class="aqm-sw-btn ${swMode === 'copy' ? 'aqm-sw-btn-primary' : ''}" id="aqm-sw-mode-copy" style="flex:1;padding:4px;font-size:10.5px;">
-                      <span>${isFa ? 'کپی ایمن' : 'Copy'}</span>
-                    </button>
-                    <button class="aqm-sw-btn ${swMode === 'move' ? 'aqm-sw-btn-primary' : ''}" id="aqm-sw-mode-move" style="flex:1;padding:4px;font-size:10.5px;">
-                      <span>${isFa ? 'برش و انتقال' : 'Move'}</span>
-                    </button>
-                  </div>
-                </div>
-
-                <!-- Structure Mode -->
-                <div class="aqm-sw-card" style="padding:9px 11px;">
-                  <label style="font-size:10.5px;font-weight:700;margin-bottom:4px;display:block;color:#94a3b8;">${isFa ? 'ساختار مقصد:' : 'Structure:'}</label>
-                  <div style="display:flex;gap:4px;">
-                    <button class="aqm-sw-btn ${swStructure === 'separate' ? 'aqm-sw-btn-primary' : ''}" id="aqm-sw-struct-sep" style="flex:1;padding:4px;font-size:10.5px;">
-                      <span>${isFa ? 'مجزا' : 'Separate'}</span>
-                    </button>
-                    <button class="aqm-sw-btn ${swStructure === 'merge' ? 'aqm-sw-btn-primary' : ''}" id="aqm-sw-struct-merge" style="flex:1;padding:4px;font-size:10.5px;">
-                      <span>${isFa ? 'ادغام' : 'Merge'}</span>
-                    </button>
-                  </div>
-                </div>
-
-                <!-- Dual Sync Toggle -->
-                <div class="aqm-sw-card" style="padding:9px 11px;display:flex;align-items:center;justify-content:space-between;">
-                  <div>
-                    <div style="font-size:11px;font-weight:700;">${isFa ? 'سینک دوطرفه' : 'Dual-Sync'}</div>
-                    <div style="font-size:9.5px;color:#64748b;">${isFa ? 'همگام‌سازی تغییرات' : 'Sync updates'}</div>
-                  </div>
-                  <input type="checkbox" id="aqm-sw-dual-sync" ${swDualSync ? 'checked' : ''} style="width:15px;height:15px;accent-color:#3b82f6;cursor:pointer;" />
-                </div>
-
-              </div>
-
-              <!-- Conversation Selector -->
-              <div class="aqm-sw-card" style="padding:10px;">
-                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;">
-                  <input type="text" id="aqm-sw-search-input" value="${swSearch}" placeholder="${isFa ? `جستجو در میان ${(swState.conversations || []).length} مکالمه...` : 'Search conversations...'}" style="flex:1;padding:5px 8px;border-radius:7px;background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.08);color:#fff;font-size:11px;outline:none;" />
-                  <button class="aqm-sw-btn" id="aqm-sw-select-all-btn" style="padding:4px 8px;font-size:10.5px;">
-                    ${swSelectedConvs.size === filteredConvs.length && filteredConvs.length > 0 ? (isFa ? 'عدم انتخاب همه' : 'Deselect All') : (isFa ? 'انتخاب همه' : 'Select All')} (${swSelectedConvs.size})
-                  </button>
-                </div>
-
-                <div class="aqm-custom-scroll" style="max-height:130px;overflow-y:auto;display:flex;flex-direction:column;gap:3px;">
-                  ${filteredConvs.length === 0 ? `
-                    <div style="text-align:center;padding:12px;color:#64748b;font-size:11px;">${isFa ? 'هیچ مکالمه‌ای یافت نشد.' : 'No conversations found.'}</div>
-                  ` : filteredConvs.map(c => {
-                    const isChecked = swSelectedConvs.has(c.id);
-                    return `
-                      <label style="display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:7px;background:${isChecked ? 'rgba(59,130,246,0.08)' : 'rgba(255,255,255,0.015)'};border:1px solid ${isChecked ? 'rgba(59,130,246,0.25)' : 'rgba(255,255,255,0.04)'};cursor:pointer;transition:all 0.12s;">
-                        <input type="checkbox" data-cid="${c.id}" class="aqm-conv-checkbox" ${isChecked ? 'checked' : ''} style="width:13px;height:13px;accent-color:#3b82f6;cursor:pointer;" />
-                        <div style="flex:1;overflow:hidden;">
-                          <div style="font-size:11px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.title || c.id}</div>
-                        </div>
-                        <span style="font-size:9px;color:#64748b;font-family:'JetBrains Mono',monospace;">${(c.updated_at || '').split(' ')[0] || ''}</span>
-                      </label>
-                    `;
-                  }).join('')}
-                </div>
-              </div>
-
-              <!-- Start Migration Button -->
-              <button class="aqm-sw-btn aqm-sw-btn-primary" id="aqm-sw-start-migration-btn" style="padding:8px;font-size:11.5px;border-radius:9px;" ${swIsMigrating ? 'disabled' : ''}>
-                <span>${swIsMigrating ? (isFa ? 'در حال انتقال...' : 'Migrating...') : (isFa ? `انتقال ${swSelectedConvs.size} مکالمه به اکانت مقصد` : `Migrate ${swSelectedConvs.size} Chats`)}</span>
-              </button>
-            </div>
-          `}
+          ` : ''}
 
         </div>
 
@@ -3826,8 +3736,7 @@
     if (tabProj) tabProj.onclick = () => { swTab = 'projects'; renderSwitcherModal(); };
     const tabTasks = modal.querySelector('#aqm-tab-btn-tasks');
     if (tabTasks) tabTasks.onclick = () => { swTab = 'tasks'; renderSwitcherModal(); };
-    const tabMig = modal.querySelector('#aqm-tab-btn-migration');
-    if (tabMig) tabMig.onclick = () => { swTab = 'migration'; renderSwitcherModal(); };
+
 
     // Accounts tab actions
     const saveCurBtn = modal.querySelector('#aqm-sw-save-current-btn') || modal.querySelector('#aqm-sw-save-current-empty-btn');
@@ -3950,7 +3859,7 @@
         fetch('http://127.0.0.1:39281/api/oauth_signin', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ accountKey: accKey })
+          body: JSON.stringify({ accountKey: accKey, noRestart: true })
         })
           .then(r => r.json())
           .then(res => {
@@ -3970,42 +3879,7 @@
     modal.querySelectorAll('[data-action="switch"]').forEach(btn => {
       btn.onclick = () => {
         const accKey = btn.getAttribute('data-acc');
-        showSwitcherToast(isFa ? 'در حال جابجایی حساب و راه‌اندازی مجدد...' : 'Switching account & restarting...');
-        if (callDaemonIpc('switch', { accountKey: accKey })) return;
-        fetch('http://127.0.0.1:39281/api/switch', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ accountKey: accKey })
-        })
-        .then(r => r.json())
-        .then(res => {
-          if (res && res.needs_reauth) {
-            showSwitcherToast(res.error || (isFa ? 'این حساب نیاز به ورود دارد' : 'Account requires sign-in'), true);
-            fetch('http://127.0.0.1:39281/api/oauth_signin', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ accountKey: accKey })
-            })
-              .then(r => r.json())
-              .then(ores => {
-                if (ores && ores.auth_url) {
-                  swOAuthUrl = ores.auth_url;
-                  renderSwitcherModal();
-                  try { window.open(ores.auth_url, '_blank'); } catch(err) {}
-                }
-              }).catch(() => { callDaemonIpc('oauth_signin', { accountKey: accKey }); });
-            return;
-          }
-          if (res && res.success) {
-            showSwitcherToast(isFa ? 'حساب فعال شد. در حال راه‌اندازی مجدد...' : 'Account active. Restarting...');
-            fetchSwitcherState(() => { renderSwitcherModal(); });
-          } else {
-            showSwitcherToast((res && res.error) || (isFa ? 'خطا در جابجایی حساب' : 'Switch error'), true);
-          }
-        })
-        .catch(() => {
-          showSwitcherToast(isFa ? 'خطا در اتصال به سرویس لوکال' : 'Connection error', true);
-        });
+        switchAccount(accKey);
       };
     });
 
@@ -4030,7 +3904,7 @@
         fetch('http://127.0.0.1:39281/api/launch_dual', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ accountKey: accKey })
+          body: JSON.stringify({ accountKey: accKey, noRestart: true })
         })
         .then(r => r.json())
         .then(res => {
@@ -4039,7 +3913,7 @@
             fetch('http://127.0.0.1:39281/api/oauth_signin', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ accountKey: accKey })
+              body: JSON.stringify({ accountKey: accKey, noRestart: true })
             })
               .then(r => r.json())
               .then(ores => {
@@ -4074,7 +3948,7 @@
           fetch('http://127.0.0.1:39281/api/delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ accountKey: accKey })
+            body: JSON.stringify({ accountKey: accKey, noRestart: true })
           })
           .then(r => r.json())
           .then(res => {
@@ -4389,112 +4263,6 @@
       };
     });
 
-    // Migration tab actions
-    const targetSelect = modal.querySelector('#aqm-sw-target-select');
-    if (targetSelect) {
-      targetSelect.onchange = (e) => {
-        swTargetAccount = e.target.value;
-      };
-    }
-
-    const copyBtn = modal.querySelector('#aqm-sw-mode-copy');
-    if (copyBtn) copyBtn.onclick = () => { swMode = 'copy'; renderSwitcherModal(); };
-    const moveBtn = modal.querySelector('#aqm-sw-mode-move');
-    if (moveBtn) moveBtn.onclick = () => { swMode = 'move'; renderSwitcherModal(); };
-
-    const sepBtn = modal.querySelector('#aqm-sw-struct-sep');
-    if (sepBtn) sepBtn.onclick = () => { swStructure = 'separate'; renderSwitcherModal(); };
-    const mergeBtn = modal.querySelector('#aqm-sw-struct-merge');
-    if (mergeBtn) mergeBtn.onclick = () => { swStructure = 'merge'; renderSwitcherModal(); };
-
-    const dualSyncCb = modal.querySelector('#aqm-sw-dual-sync');
-    if (dualSyncCb) {
-      dualSyncCb.onchange = (e) => {
-        swDualSync = e.target.checked;
-      };
-    }
-
-    const searchInput = modal.querySelector('#aqm-sw-search-input');
-    if (searchInput) {
-      searchInput.oninput = (e) => {
-        swSearch = e.target.value;
-        renderSwitcherModal();
-        const nextInput = modal.querySelector('#aqm-sw-search-input');
-        if (nextInput) {
-          nextInput.focus();
-          nextInput.selectionStart = nextInput.selectionEnd = nextInput.value.length;
-        }
-      };
-    }
-
-    const selectAllBtn = modal.querySelector('#aqm-sw-select-all-btn');
-    if (selectAllBtn) {
-      selectAllBtn.onclick = () => {
-        if (swSelectedConvs.size === filteredConvs.length && filteredConvs.length > 0) {
-          swSelectedConvs.clear();
-        } else {
-          filteredConvs.forEach(c => swSelectedConvs.add(c.id));
-        }
-        renderSwitcherModal();
-      };
-    }
-
-    modal.querySelectorAll('.aqm-conv-checkbox').forEach(cb => {
-      cb.onchange = (e) => {
-        const cid = cb.getAttribute('data-cid');
-        if (cb.checked) swSelectedConvs.add(cid);
-        else swSelectedConvs.delete(cid);
-        renderSwitcherModal();
-      };
-    });
-
-    const startMigrateBtn = modal.querySelector('#aqm-sw-start-migration-btn');
-    if (startMigrateBtn) {
-      startMigrateBtn.onclick = () => {
-        if (swSelectedConvs.size === 0) {
-          showSwitcherToast(isFa ? 'حداقل یک گفتگو را برای انتقال انتخاب کنید' : 'Select at least one conversation', true);
-          return;
-        }
-        if (!swTargetAccount) {
-          showSwitcherToast(isFa ? 'لطفاً اکانت مقصد را انتخاب کنید' : 'Select target account', true);
-          return;
-        }
-        swIsMigrating = true;
-        renderSwitcherModal();
-        showSwitcherToast(isFa ? 'در حال انتقال مکالمات...' : 'Migrating conversations...');
-
-        const activeKey = email || (activeAcc && activeAcc.email) || 'Active Account';
-        fetch('http://127.0.0.1:39281/api/migrate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            conversationIds: Array.from(swSelectedConvs),
-            sourceAccount: activeKey,
-            targetAccount: swTargetAccount,
-            mode: swMode,
-            structure: swStructure,
-            dualSync: swDualSync
-          })
-        })
-        .then(r => r.json())
-        .then(res => {
-          swIsMigrating = false;
-          if (res.success) {
-            showSwitcherToast(isFa ? `انتقال ${res.migrated_count || swSelectedConvs.size} گفتگو با موفقیت انجام شد` : 'Migration completed!');
-            swSelectedConvs.clear();
-            fetchSwitcherState(() => { renderSwitcherModal(); });
-          } else {
-            showSwitcherToast(res.error || (isFa ? 'خطا در انتقال' : 'Migration error'), true);
-            renderSwitcherModal();
-          }
-        })
-        .catch(err => {
-          swIsMigrating = false;
-          showSwitcherToast(isFa ? 'ارتباط با سرویس برقرار نشد' : 'Service error', true);
-          renderSwitcherModal();
-        });
-      };
-    }
   }
 
   // Pre-fetch switcher state on start
@@ -4570,38 +4338,9 @@
       }
     }
 
-    // 2. Floating Capsule Pill Button (Apple Dynamic Island Inspired)
-    let pill = document.getElementById('antigravity-usage-pill');
-    if (!pill) {
-      pill = document.createElement('button');
-      pill.id = 'antigravity-usage-pill';
-      pill.type = 'button';
-    }
-    if (trigger) {
-      const wrapper = trigger.closest('.no-focus-agent-input') || trigger.parentElement;
-      if (pill.parentElement !== wrapper.parentElement) {
-        wrapper.insertAdjacentElement('afterend', pill);
-      }
-    } else if (dock && pill.parentElement !== dock) {
-      dock.appendChild(pill);
-    }
-    pill.style.display = 'inline-flex';
-    pill.style.alignItems = 'center';
-    pill.style.gap = '7px';
-    pill.style.marginLeft = '7px';
-    pill.style.padding = '0 11px';
-    pill.style.height = '28px';
-    pill.style.borderRadius = '9999px';
-    pill.style.fontSize = '11.5px';
-    pill.style.fontWeight = '700';
-    pill.style.fontFamily = `'JetBrains Mono', ${fullFamily}`;
-    pill.style.background = theme.pillBg;
-    pill.style.border = `1px solid ${theme.pillBorder}`;
-    pill.style.color = theme.pillColor;
-    pill.style.boxShadow = `inset 0 1px 1px rgba(255,255,255,0.2), 0 4px 14px rgba(0,0,0,0.3)`;
-    pill.style.cursor = 'pointer';
-    pill.style.userSelect = 'none';
-    pill.style.transition = 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)';
+    // Clean up old usage pill if still present
+    const oldPill = document.getElementById('antigravity-usage-pill');
+    if (oldPill) oldPill.remove();
 
     const isRem = (displayMode === 'remaining');
     const sessRem = Math.round(currentUsage.session?.remaining_pct ?? (100 - Math.round(currentUsage.session?.used_pct ?? 0)));
@@ -4630,33 +4369,23 @@
         `;
       }
     }
-
-    const pillSig = `${badgeSess}|${sessReset}|${isRefreshing}|${theme.dotColor}|${theme.id}`;
-    if (pill.dataset.aqmSig !== pillSig) {
-      pill.dataset.aqmSig = pillSig;
-      pill.title = titleTooltip;
-      pill.innerHTML = `
-        <span style="width:5.5px;height:5.5px;border-radius:50%;background:${theme.dotColor};box-shadow:0 0 7px ${theme.dotColor};animation:aqm-pulse-dot 2s infinite ease-in-out;"></span>
-        <span class="${isRefreshing ? 'aqm-rotating' : ''}" style="color:${theme.id === 'pastel' ? '#ff70a6' : '#fbbf24'};display:flex;align-items:center;filter:drop-shadow(0 0 5px ${theme.id === 'pastel' ? 'rgba(255,112,166,0.6)' : 'rgba(251,191,36,0.6)'});">
-          ${theme.id === 'pastel' ? '🌸' : SVGS.lightning}
-        </span>
-        <span style="letter-spacing:-0.02em;" dir="ltr">${badgeSess}%</span>
-        <span style="opacity:0.75;font-size:10px;font-weight:500;font-family:${fontFa};">(${sessReset})</span>
-      `;
-    }
-
-    pill.onclick = togglePopover;
-
-    // 3. Floating Account Capsule Pill (In-Editor Native Switcher Trigger)
+    // 2. Floating Account Action Pill (Native Profile & Switcher Trigger)
     let accPill = document.getElementById('antigravity-account-pill');
     if (!accPill) {
       accPill = document.createElement('button');
       accPill.id = 'antigravity-account-pill';
       accPill.type = 'button';
     }
-    if (trigger) {
-      if (accPill.parentElement !== pill.parentElement) {
-        pill.insertAdjacentElement('afterend', accPill);
+
+    const turboBtn = document.querySelector('[data-testid="permissions-selector-trigger"]') || Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('Turbo'));
+
+    if (turboBtn && turboBtn.parentElement) {
+      if (accPill.nextElementSibling !== turboBtn) {
+        turboBtn.insertAdjacentElement('beforebegin', accPill);
+      }
+    } else if (trigger && trigger.parentElement) {
+      if (accPill.previousElementSibling !== trigger) {
+        trigger.insertAdjacentElement('afterend', accPill);
       }
     } else if (dock && accPill.parentElement !== dock) {
       dock.appendChild(accPill);
@@ -4664,95 +4393,42 @@
 
     accPill.style.display = 'inline-flex';
     accPill.style.alignItems = 'center';
-    accPill.style.gap = '6px';
-    accPill.style.marginLeft = '7px';
-    accPill.style.padding = '0 10px';
+    accPill.style.justifyContent = 'center';
+    accPill.style.width = '28px';
     accPill.style.height = '28px';
-    accPill.style.borderRadius = '9999px';
-    accPill.style.fontSize = '11px';
-    accPill.style.fontWeight = '700';
-    accPill.style.fontFamily = `'Vazirmatn', ${fullFamily}`;
-    accPill.style.background = theme.pillBg || 'rgba(15, 23, 42, 0.75)';
-    accPill.style.border = `1px solid ${theme.pillBorder || 'rgba(255, 255, 255, 0.16)'}`;
-    accPill.style.color = theme.textColor || '#f1f5f9';
-    accPill.style.boxShadow = `inset 0 1px 1px rgba(255,255,255,0.18), 0 4px 14px rgba(0,0,0,0.3)`;
+    accPill.style.minWidth = '28px';
+    accPill.style.minHeight = '28px';
+    accPill.style.marginRight = '6px';
+    accPill.style.marginLeft = '2px';
+    accPill.style.padding = '0';
+    accPill.style.borderRadius = '50%';
+    accPill.style.position = 'relative';
+    accPill.style.background = 'rgba(15, 23, 42, 0.78)';
+    accPill.style.backdropFilter = 'blur(10px)';
+    accPill.style.webkitBackdropFilter = 'blur(10px)';
+    accPill.style.border = '1.5px solid rgba(255, 255, 255, 0.22)';
+    accPill.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.35)';
     accPill.style.cursor = 'pointer';
     accPill.style.userSelect = 'none';
     accPill.style.transition = 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)';
-    const isInst2 = isInstance2Window();
-    let designatedEmail = '';
-    try {
-      designatedEmail = localStorage.getItem('antigravity:account_email') || window.__antigravity_account || (swState.activeAccount && swState.activeAccount.email) || (currentUsage && currentUsage.email) || '';
-    } catch(e) {}
-    if (!designatedEmail && swState.savedAccounts) {
-      const keys = Object.keys(swState.savedAccounts);
-      if (keys.length > 0) {
-        designatedEmail = (isInst2 ? (keys[1] || keys[0]) : keys[0]);
-      }
-    }
-
-    let targetKey = designatedEmail;
-    if (swState.savedAccounts && !swState.savedAccounts[targetKey]) {
-      const matchKey = Object.keys(swState.savedAccounts).find(k => k.toLowerCase() === targetKey.toLowerCase());
-      if (matchKey) {
-        targetKey = matchKey;
-      }
-    }
-
-    const savedInfo = (swState.savedAccounts && swState.savedAccounts[targetKey]) || {};
-    let fallbackName = savedInfo.name || (targetKey ? (targetKey.split('@')[0].split('.')[0].charAt(0).toUpperCase() + targetKey.split('@')[0].split('.')[0].slice(1)) : 'Account');
-    let fallbackAvatar = savedInfo.avatar || '';
-
-    let accUser = {
-      email: targetKey,
-      name: fallbackName,
-      avatar: fallbackAvatar,
-      tier: savedInfo.tier || 'Google AI Pro',
-      tier_code: savedInfo.tier_code || 'pro'
-    };
-
-    if (swState.activeAccount && swState.activeAccount.email && swState.activeAccount.email.toLowerCase() === targetKey.toLowerCase()) {
-      accUser = { ...accUser, ...swState.activeAccount };
-    } else if (currentUsage && currentUsage.email && currentUsage.email.toLowerCase() === targetKey.toLowerCase()) {
-      accUser = { ...accUser, ...currentUsage };
-    }
-
-    if (accUser.name && (accUser.name === 'Account 2' || accUser.name.toLowerCase() === 'user')) {
-      accUser.name = savedInfo.name || fallbackName;
-    }
-
-    let accEmail = targetKey;
-    let accName = accUser.name || fallbackName;
-    let accAvatar = accUser.avatar || fallbackAvatar;
-    let accTier = accUser.tier || 'Google AI Pro';
-    let accTierCode = (accUser.tier_code || 'pro').toLowerCase();
-
-    const tierBadgeBg = accTierCode === 'ultra' ? 'linear-gradient(135deg, #ec4899, #8b5cf6)' : (accTierCode === 'pro' ? 'linear-gradient(135deg, rgba(245,158,11,0.25), rgba(217,119,6,0.35))' : 'rgba(148,163,184,0.15)');
-    const tierBadgeColor = accTierCode === 'ultra' ? '#ffffff' : (accTierCode === 'pro' ? '#fbbf24' : '#94a3b8');
-    const tierBadgeBorder = accTierCode === 'ultra' ? 'rgba(236,72,153,0.5)' : (accTierCode === 'pro' ? 'rgba(251,191,36,0.45)' : 'rgba(148,163,184,0.25)');
-
-    const initialChar = accName ? accName.charAt(0).toUpperCase() : (targetKey ? targetKey.charAt(0).toUpperCase() : 'A');
+    accPill.style.flexShrink = '0';
+    accPill.style.boxSizing = 'border-box';
+    const { accEmail, accName, accAvatar, accTier, accTierCode, initialChar, tierBadgeBg, tierBadgeColor, tierBadgeBorder } = getActiveAccountInfo();
     const initialAvatarHtml = `<span style="width:17px;height:17px;border-radius:50%;background:linear-gradient(135deg, #4285f4, #9b72cb);display:inline-flex;align-items:center;justify-content:center;font-size:10px;color:#fff;font-weight:800;pointer-events:none;">${initialChar}</span>`;
 
-    const accPillSig = `${accEmail}|${accName}|${accAvatar}|${accTierCode}|${theme.pillBg}`;
+    const accPillSig = `${accEmail}|${accName}|${accAvatar}|${accTierCode}|circle_v5`;
     if (accPill.dataset.aqmSig !== accPillSig) {
       accPill.dataset.aqmSig = accPillSig;
-      accPill.title = `اکانت فعال: ${accName} (${accTier})\nبرای سوئیچ اکانت یا جابجایی پروژه‌ها کلیک کنید`;
+      accPill.title = `مرکز کنترل آنتی‌گرویتی (حساب: ${accName})\nکلیک برای باز کردن پنل یکپارچه (سوئیچ اکانت، فونت، راست‌چین و سهمیه)`;
       accPill.innerHTML = `
-        <span style="width:6px;height:6px;border-radius:50%;background:#10b981;box-shadow:0 0 8px #10b981;animation:aqm-pulse-dot 2s infinite ease-in-out;pointer-events:none;"></span>
-        ${accAvatar ? `<img src="${accAvatar}" style="width:17px;height:17px;border-radius:50%;object-fit:cover;border:1px solid rgba(255,255,255,0.3);pointer-events:none;" onerror="this.style.display='none'" />` : initialAvatarHtml}
-        <span style="letter-spacing:-0.01em;font-weight:700;max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;pointer-events:none;" dir="ltr">${accName}</span>
-        <span style="font-size:9px;font-weight:800;padding:1px 6px;border-radius:9999px;background:${tierBadgeBg};color:${tierBadgeColor};border:1px solid ${tierBadgeBorder};text-transform:uppercase;letter-spacing:0.02em;pointer-events:none;">${accTierCode.toUpperCase()}</span>
-        <span style="font-size:8px;opacity:0.6;margin-left:1px;pointer-events:none;">▼</span>
+        ${accAvatar ? `<img src="${accAvatar}" style="width:100%;height:100%;border-radius:50%;object-fit:cover;display:block;pointer-events:none;" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />` : ''}
+        <span style="${accAvatar ? 'display:none;' : 'display:flex;'}width:100%;height:100%;align-items:center;justify-content:center;border-radius:50%;background:linear-gradient(135deg, #3b82f6, #8b5cf6);color:#ffffff;font-weight:800;font-size:11px;pointer-events:none;">${initialChar}</span>
+        <span style="position:absolute;top:0;right:0;width:7px;height:7px;border-radius:50%;background:#10b981;border:1.5px solid #0f172a;box-shadow:0 0 6px #10b981;animation:aqm-pulse-dot 2s infinite ease-in-out;pointer-events:none;"></span>
       `;
     }
 
     accPill.onclick = (e) => {
-      if (e) {
-        e.preventDefault();
-        e.stopPropagation();
-      }
-      toggleSwitcherModal();
+      togglePopover(e);
     };
     accPill.onpointerdown = (e) => {
       if (e) {
@@ -4760,8 +4436,18 @@
       }
     };
 
-    accPill.onmouseenter = () => { accPill.style.transform = 'translateY(-1px) scale(1.02)'; };
-    accPill.onmouseleave = () => { accPill.style.transform = ''; };
+    accPill.onmouseenter = () => {
+      accPill.style.transform = 'scale(1.1)';
+      if (!accPill.classList.contains('aqm-consuming')) {
+        accPill.style.borderColor = '#10b981';
+      }
+    };
+    accPill.onmouseleave = () => {
+      accPill.style.transform = '';
+      if (!accPill.classList.contains('aqm-consuming')) {
+        accPill.style.borderColor = 'rgba(255, 255, 255, 0.22)';
+      }
+    };
 
     const pop = document.getElementById('antigravity-usage-popover');
     if (pop && pop.style.display !== 'none' && !pop.matches(':hover')) {
@@ -4769,17 +4455,17 @@
     }
   }
 
-  // 4. Safe Non-Blocking DOM Watcher & Task Poller
+  // 3. Safe Non-Blocking DOM Watcher & Task Poller
   let isTaskRunning = false;
 
   function startActiveTaskPolling() {
     if (window.__aqm_task_interval) return;
-    const pill = document.getElementById('antigravity-usage-pill');
-    if (pill) pill.classList.add('aqm-task-active');
+    const accPill = document.getElementById('antigravity-account-pill');
+    if (accPill) accPill.classList.add('aqm-consuming');
 
     refreshQuota();
     window.__aqm_task_interval = setInterval(() => {
-      const stopBtn = document.querySelector('button[aria-label*="Stop execution"], button[aria-label*="Cancel"]');
+      const stopBtn = document.querySelector('button[aria-label*="Stop"], button[data-testid*="stop"], button[title*="Stop"], .codicon-stop-circle, button[aria-label*="Cancel"]');
       if (!stopBtn) {
         stopActiveTaskPolling();
         return;
@@ -4789,12 +4475,13 @@
   }
 
   function stopActiveTaskPolling() {
+    isTaskRunning = false;
     if (window.__aqm_task_interval) {
       clearInterval(window.__aqm_task_interval);
       window.__aqm_task_interval = null;
     }
-    const pill = document.getElementById('antigravity-usage-pill');
-    if (pill) pill.classList.remove('aqm-task-active');
+    const accPill = document.getElementById('antigravity-account-pill');
+    if (accPill) accPill.classList.remove('aqm-consuming');
 
     setTimeout(() => {
       refreshQuota();
@@ -4804,21 +4491,38 @@
   function startDomWatcher() {
     if (window.__aqm_dom_interval) clearInterval(window.__aqm_dom_interval);
     window.__aqm_dom_interval = setInterval(() => {
+      const turboBtn = document.querySelector('[data-testid="permissions-selector-trigger"]') || Array.from(document.querySelectorAll('button')).find(b => b.textContent && b.textContent.includes('Turbo'));
       const trigger = document.querySelector('[data-testid="model-selector-trigger"]');
+      const dock = document.querySelector('.part.statusbar, .statusbar, footer, [role="status"]') || document.getElementById('antigravity-quota-dock');
       const badge = document.getElementById('antigravity-usage-badge');
-      const pill = document.getElementById('antigravity-usage-pill');
       const accPill = document.getElementById('antigravity-account-pill');
-      if (trigger && (!badge || !pill || !accPill)) {
+
+      // Ensure old usage pill is removed
+      const oldPill = document.getElementById('antigravity-usage-pill');
+      if (oldPill) oldPill.remove();
+
+      const shouldRelocatePill = turboBtn && accPill && accPill.nextElementSibling !== turboBtn;
+      if (!badge || !accPill || shouldRelocatePill) {
         renderBadge();
       }
 
-      const stopBtn = document.querySelector('button[aria-label*="Stop execution"], button[aria-label*="Cancel"]');
-      if (stopBtn && !isTaskRunning) {
-        isTaskRunning = true;
-        startActiveTaskPolling();
-      } else if (!stopBtn && isTaskRunning) {
-        isTaskRunning = false;
-        stopActiveTaskPolling();
+      const stopBtn = document.querySelector('button[aria-label*="Stop"], button[data-testid*="stop"], button[title*="Stop"], .codicon-stop-circle, button[aria-label*="Cancel"]');
+      if (stopBtn) {
+        if (!isTaskRunning) {
+          isTaskRunning = true;
+          startActiveTaskPolling();
+        }
+        if (accPill && !accPill.classList.contains('aqm-consuming')) {
+          accPill.classList.add('aqm-consuming');
+        }
+      } else {
+        if (isTaskRunning) {
+          isTaskRunning = false;
+          stopActiveTaskPolling();
+        }
+        if (accPill && accPill.classList.contains('aqm-consuming')) {
+          accPill.classList.remove('aqm-consuming');
+        }
       }
     }, 1200);
   }
@@ -4827,6 +4531,7 @@
   window.__closeSwitcherModal = closeSwitcherModal;
   window.__toggleSwitcherModal = toggleSwitcherModal;
   window.__renderAntigravityBadge = renderBadge;
+  window.__aqm_refresh_runtime = () => fetchStoredQuota().then(renderBadge);
   window.__refreshAntigravityQuota = refreshQuota;
   window.__openAntigravityPopover = () => {
     lastPopoverOpenTime = Date.now();
@@ -4839,20 +4544,12 @@
     if (pop) pop.style.display = 'none';
   };
   window.__setAntigravityTheme = (themeId) => {
-    if (THEMES[themeId]) {
-      currentThemeId = themeId;
-      try { localStorage.setItem('antigravity:quota_theme', themeId); } catch (e) {}
-      persistUserSettings({ theme: themeId });
-      applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
-      renderBadge();
-      renderPopover();
-    }
+    applyAppWorkspaceTheme(getActiveTheme(), false);
+    renderBadge();
+    renderPopover();
   };
   window.__toggleFullAppTheming = (enabled) => {
-    isFullAppThemingEnabled = !!enabled;
-    try { localStorage.setItem('antigravity:full_app_theming', String(isFullAppThemingEnabled)); } catch (e) {}
-    persistUserSettings({ fullTheming: isFullAppThemingEnabled });
-    applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
+    applyAppWorkspaceTheme(getActiveTheme(), false);
     renderPopover();
   };
   window.__toggleAntigravityPrivacyMode = (enabled) => {
@@ -4862,36 +4559,49 @@
     renderPopover();
   };
   window.__setAntigravityFont = (en, fa) => {
-    if (en) { customFontEn = en; try { localStorage.setItem('antigravity:custom_font_en', en); } catch(e){} }
-    if (fa) { customFontFa = fa; try { localStorage.setItem('antigravity:custom_font_fa', fa); } catch(e){} }
+    if (en) {
+      const cleanEn = sanitizeFontName(en);
+      if (cleanEn) { customFontEn = cleanEn; try { localStorage.setItem('antigravity:custom_font_en', cleanEn); } catch(e){} }
+    }
+    if (fa) {
+      const cleanFa = sanitizeFontName(fa);
+      if (cleanFa) { customFontFa = cleanFa; try { localStorage.setItem('antigravity:custom_font_fa', cleanFa); } catch(e){} }
+    }
     persistUserSettings({ fontEn: customFontEn, fontFa: customFontFa });
     applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
     renderBadge();
     renderPopover();
   };
   window.__importAntigravityFont = (name, url = '', type = 'fa') => {
-    if (!name) return;
-    if (!customImportedFonts.some(f => f.id.toLowerCase() === name.toLowerCase())) {
-      customImportedFonts.push({ id: name, name, url, type });
-      try { localStorage.setItem('antigravity:custom_imported_fonts', JSON.stringify(customImportedFonts)); } catch(e){}
-    }
-    if (url) injectImportedFontStyles();
-    if (type === 'fa') {
-      customFontFa = name;
-      try { localStorage.setItem('antigravity:custom_font_fa', name); } catch(e){}
+    const cleanName = sanitizeFontName(name);
+    if (!cleanName) return;
+    const cleanUrl = sanitizeFontUrl(url);
+    const fType = (type === 'en') ? 'en' : 'fa';
+    const existingIdx = customImportedFonts.findIndex(f => f.id.toLowerCase() === cleanName.toLowerCase());
+    if (existingIdx >= 0) {
+      customImportedFonts[existingIdx] = { id: cleanName, name: cleanName, url: cleanUrl, type: fType };
     } else {
-      customFontEn = name;
-      try { localStorage.setItem('antigravity:custom_font_en', name); } catch(e){}
+      customImportedFonts.push({ id: cleanName, name: cleanName, url: cleanUrl, type: fType });
+    }
+    try { localStorage.setItem('antigravity:custom_imported_fonts', JSON.stringify(customImportedFonts)); } catch(e){}
+    if (cleanUrl) injectImportedFontStyles();
+    if (fType === 'fa') {
+      customFontFa = cleanName;
+      try { localStorage.setItem('antigravity:custom_font_fa', cleanName); } catch(e){}
+    } else {
+      customFontEn = cleanName;
+      try { localStorage.setItem('antigravity:custom_font_en', cleanName); } catch(e){}
     }
     persistUserSettings({ customImportedFonts, fontEn: customFontEn, fontFa: customFontFa });
-    ensureFontLoaded(name);
-    applyAppWorkspaceTheme(getActiveTheme(), isFullAppThemingEnabled);
+    ensureFontLoaded(cleanName);
+    applyAppWorkspaceTheme(getActiveTheme(), false);
     renderBadge();
     renderPopover();
   };
 
   // Smart RTL Global API & Exports
   window.updateDir = updateDir;
+  window.switchAccount = switchAccount;
   window.openSwitcherModal = openSwitcherModal;
   window.closeSwitcherModal = closeSwitcherModal;
   window.renderSwitcherModal = renderSwitcherModal;
@@ -4929,17 +4639,17 @@
   ensureFontLoaded(customFontFa);
   applyConversationIsolationFilter();
   try {
-    let isoDebounce = null;
-    const isoObserver = new MutationObserver(() => {
+    window.__aqm_iso_timeout = null;
+    window.__aqm_iso_observer = new MutationObserver(() => {
       if (!isInstance2Window()) return;
-      if (isoDebounce) return;
-      isoDebounce = setTimeout(() => {
-        isoDebounce = null;
+      if (window.__aqm_iso_timeout) return;
+      window.__aqm_iso_timeout = setTimeout(() => {
+        window.__aqm_iso_timeout = null;
         applyConversationIsolationFilter();
       }, 150);
     });
-    isoObserver.observe(document.body, { childList: true, subtree: true });
-    setInterval(() => {
+    window.__aqm_iso_observer.observe(document.body, { childList: true, subtree: true });
+    window.__aqm_iso_interval = setInterval(() => {
       if (isInstance2Window()) applyConversationIsolationFilter();
     }, 2000);
   } catch(e) {}
@@ -4949,4 +4659,7 @@
     applyConversationIsolationFilter();
   });
   renderBadge();
+  window.__aqm_runtime_revision = runtimeRevision;
+  window.__aqm_runtime_settings = runtimeSettings;
+  window.__aqm_runtime_account = runtimeAccount;
 })();

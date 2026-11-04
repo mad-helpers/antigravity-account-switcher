@@ -21,11 +21,45 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import quota_engine
 import migration_engine
 
-if hasattr(sys.stdout, 'reconfigure'):
+LOG_FILE = Path.home() / ".gemini" / "antigravity" / "server.log"
+LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+class SafeLogStream:
+    def __init__(self, log_path):
+        self.log_path = log_path
+        self._f = None
+        try:
+            self._f = open(log_path, "a", encoding="utf-8", buffering=1)
+        except Exception:
+            pass
+    def write(self, s):
+        try:
+            if self._f:
+                self._f.write(s)
+                self._f.flush()
+        except Exception:
+            pass
+    def flush(self):
+        try:
+            if self._f:
+                self._f.flush()
+        except Exception:
+            pass
+
+if "pythonw" in (sys.executable or "").lower():
+    safe_stream = SafeLogStream(LOG_FILE)
+    sys.stdout = safe_stream
+    sys.stderr = safe_stream
+else:
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stdout.write(" ")
+        sys.stdout.flush()
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8')
     except Exception:
-        pass
+        safe_stream = SafeLogStream(LOG_FILE)
+        sys.stdout = safe_stream
+        sys.stderr = safe_stream
 
 PORT = 39285
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -141,38 +175,262 @@ def save_user_settings(patch, instance_id=None, account_email=None):
     except Exception as e:
         return False, str(e)
 
-def restart_language_server():
-    sys_name = quota_engine.get_current_system()
-    if sys_name == 'windows':
-        subprocess.run(['powershell', '-NoProfile', '-Command', 'Get-Process -Name language_server -ErrorAction SilentlyContinue | Stop-Process -Force'], capture_output=True, creationflags=0x08000000)
-    elif sys_name == 'macos':
-        subprocess.run(['pkill', '-9', '-f', 'language_server'], capture_output=True)
 
-def restart_antigravity():
+
+def ensure_daemon_running():
+    """
+    Checks if sync_daemon HTTP server is responding on port 39281.
+    If not, starts sync_daemon.py as a detached background process with watchdog.
+    """
+    try:
+        import urllib.request
+        req = urllib.request.Request("http://127.0.0.1:39281/health")
+        with urllib.request.urlopen(req, timeout=0.8) as resp:
+            if resp.status == 200:
+                return True
+    except Exception:
+        pass
+
+    sys_name = quota_engine.get_current_system()
+    bin_dir = Path.home() / ".gemini" / "antigravity" / "bin"
+    daemon_script = bin_dir / "sync_daemon.py"
+    if not daemon_script.exists():
+        daemon_script = Path(__file__).resolve().parent / "sync_daemon.py"
+
+    if sys_name == 'windows':
+        # Task Scheduler owns the daemon independently of an IDE's process/job tree.
+        try:
+            result = subprocess.run(
+                ['schtasks.exe', '/Run', '/TN', 'AntigravityQuotaMonitor'],
+                capture_output=True, timeout=8, creationflags=0x08000000)
+            if result.returncode == 0:
+                return True
+            print('[SERVICE] Scheduled daemon start failed; no caller-owned fallback.', flush=True)
+            return False
+        except Exception:
+            print('[SERVICE] Could not request scheduled daemon start.', flush=True)
+            return False
+    elif sys_name in ('darwin', 'linux', 'macos'):
+        try:
+            subprocess.Popen(
+                [sys.executable, str(daemon_script)],
+                cwd=str(bin_dir if bin_dir.exists() else daemon_script.parent),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True
+            )
+            return True
+        except Exception as e:
+            print(f"[WATCHDOG] Failed to spawn sync_daemon: {e}", flush=True)
+            return False
+    return False
+
+
+
+
+
+
+
+def _antigravity_executable_paths():
+    """Supported Windows installations, in launch-preference order."""
+    roots = [(os.environ.get('LOCALAPPDATA'), ('Programs', 'antigravity')),
+             (os.environ.get('ProgramFiles'), ('Antigravity',)),
+             (os.environ.get('ProgramFiles(x86)'), ('Antigravity',))]
+    return list(dict.fromkeys(os.path.join(root, *parts, 'Antigravity.exe')
+                              for root, parts in roots if root))
+
+
+def _windows_process_session_id(pid):
+    """Read the Windows logon session without sending any process control request."""
+    import ctypes
+    from ctypes import wintypes
+    session = wintypes.DWORD()
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    query = kernel32.ProcessIdToSessionId
+    query.argtypes = [wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    query.restype = wintypes.BOOL
+    if not query(int(pid), ctypes.byref(session)):
+        raise OSError(ctypes.get_last_error(), 'Cannot establish process session ownership')
+    return int(session.value)
+
+
+def _primary_antigravity_processes():
+    """Find the primary profile in every supported install, excluding other instances."""
+    import psutil
+    current_user = psutil.Process().username()
+    if not isinstance(current_user, str) or not current_user.strip():
+        raise RuntimeError('Cannot establish current user ownership')
+    current_user = current_user.casefold()
+    current_session = _windows_process_session_id(os.getpid())
+    if not isinstance(current_session, int) or current_session < 0:
+        raise RuntimeError('Cannot establish current Windows session')
+    expected = {os.path.normcase(os.path.abspath(path)) for path in _antigravity_executable_paths()}
+    expected_engines = {os.path.normcase(os.path.join(os.path.dirname(path),
+                         'resources', 'bin', 'language_server.exe')) for path in expected}
+    primary_data = os.path.normcase(os.path.abspath(os.path.join(
+        os.environ.get('APPDATA') or os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming'), 'Antigravity')))
+    mains, engines = [], []
+    for process in psutil.process_iter(['pid', 'name', 'exe', 'cmdline', 'username']):
+        try:
+            info = process.info
+            name = (info.get('name') or '').lower()
+            args = info.get('cmdline') or []
+            if name in ('antigravity.exe', 'language_server.exe') and not info.get('exe'):
+                candidate_user = info.get('username')
+                if isinstance(candidate_user, str) and candidate_user.strip() and candidate_user.casefold() != current_user:
+                    continue
+                raise RuntimeError('Cannot establish application executable ownership')
+            exe = os.path.normcase(os.path.abspath(info.get('exe') or ''))
+            # The same installation may serve several signed-in Windows users
+            # or sessions. Only this server's user/session owns this restart.
+            if not ((name == 'antigravity.exe' and exe in expected) or
+                    (name == 'language_server.exe' and exe in expected_engines)):
+                continue
+            process_user = info.get('username')
+            if not isinstance(process_user, str) or not process_user.strip():
+                raise RuntimeError('Cannot establish application process user ownership')
+            if process_user.casefold() != current_user:
+                continue
+            process_session = _windows_process_session_id(process.pid)
+            if not isinstance(process_session, int) or process_session < 0:
+                raise RuntimeError('Cannot establish application process session ownership')
+            if not isinstance(info.get('cmdline'), (list, tuple)) or not info['cmdline']:
+                raise RuntimeError('Cannot establish application profile ownership')
+            same_session = process_session == current_session
+            if name == 'language_server.exe' and exe in expected_engines:
+                app_data = None
+                for index, argument in enumerate(args):
+                    if argument == '--app_data_dir' and index + 1 < len(args):
+                        app_data = args[index + 1]
+                    elif argument.startswith('--app_data_dir='):
+                        app_data = argument.split('=', 1)[1]
+                if app_data == 'antigravity':
+                    if not same_session:
+                        raise RuntimeError('Primary database writer belongs to another session of this user')
+                    engines.append(process)
+                continue
+            if name != 'antigravity.exe' or exe not in expected:
+                continue
+            if any(a.startswith(('--type=', '--import')) for a in args):
+                continue
+            data_dir = None
+            for index, argument in enumerate(args):
+                if argument.startswith('--user-data-dir='):
+                    data_dir = argument.split('=', 1)[1].strip('"')
+                elif argument == '--user-data-dir' and index + 1 < len(args):
+                    data_dir = args[index + 1].strip('"')
+            if data_dir and os.path.normcase(os.path.abspath(data_dir)) != primary_data:
+                continue
+            if not same_session:
+                raise RuntimeError('Primary application belongs to another session of this user')
+            mains.append(process)
+        except psutil.NoSuchProcess:
+            continue
+    return mains, engines
+
+
+def restart_language_server():
+    """Restart through the owning app; never terminate an SQLite writer alone."""
+    return restart_antigravity()
+
+
+def restart_antigravity(force=False):
+    """Request normal app exit, wait for its engine, and fail closed on timeout."""
     sys_name = quota_engine.get_current_system()
     if sys_name == 'windows':
-        subprocess.run(['powershell', '-NoProfile', '-Command', 'Get-Process -Name Antigravity, language_server -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue'], capture_output=True, creationflags=0x08000000)
-        time.sleep(1.2)
-        paths = [
-            os.path.expandvars(r"%LOCALAPPDATA%\Programs\antigravity\Antigravity.exe"),
-            os.path.expandvars(r"%ProgramFiles%\Antigravity\Antigravity.exe"),
-            os.path.expandvars(r"%ProgramFiles(x86)%\Antigravity\Antigravity.exe"),
-        ]
-        exe = next((p for p in paths if os.path.exists(p)), None)
-        if exe:
-            DETACHED_PROCESS = 0x00000008
-            CREATE_NEW_PROCESS_GROUP = 0x00000200
-            subprocess.Popen([exe], creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
-        else:
-            subprocess.run(['powershell', '-NoProfile', '-Command', 'Start-Process Antigravity'], capture_output=True, creationflags=0x08000000)
-    elif sys_name == 'macos':
-        subprocess.run(['pkill', '-9', '-f', '/Applications/Antigravity.app'], capture_output=True)
-        subprocess.run(['pkill', '-9', '-f', 'language_server'], capture_output=True)
-        time.sleep(1.0)
+        import psutil
+        try:
+            mains, engines = _primary_antigravity_processes()
+            # Retain the installation that actually owns the primary profile.
+            # Another installed copy must not replace it merely due to path order.
+            owners = {os.path.normcase(os.path.abspath(p.info['exe'])):p.info['exe'] for p in mains}
+            for process in engines:
+                engine_exe = process.info['exe']
+                owner = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(engine_exe))), 'Antigravity.exe')
+                owners.setdefault(os.path.normcase(os.path.abspath(owner)), owner)
+            if len(owners) > 1:
+                print('[RESTART] Refused: multiple installations own the primary profile', flush=True)
+                return False
+            exe = next(iter(owners.values()), None)
+            if exe is None:
+                exe = next((path for path in _antigravity_executable_paths() if os.path.exists(path)), None)
+            if not exe or not os.path.exists(exe):
+                print('[RESTART] Refused: owning executable is unavailable', flush=True)
+                return False
+            for process in mains:
+                result = subprocess.run(
+                    ['powershell', '-NoProfile', '-Command',
+                     f'Get-Process -Id {int(process.pid)} -ErrorAction SilentlyContinue | ForEach-Object {{ $_.CloseMainWindow() | Out-Null }}'],
+                    capture_output=True, creationflags=0x08000000, timeout=10)
+                if result.returncode != 0:
+                    print('[RESTART] Refused: normal window-close request failed', flush=True)
+                    return False
+            _, alive = psutil.wait_procs(mains + engines, timeout=15)
+            if alive:
+                print('[RESTART] Refused: primary app or database writer remains active', flush=True)
+                return False
+            # Re-check every supported install after waiting. A newly launched
+            # primary must not receive a second launcher from this request.
+            current_mains, current_engines = _primary_antigravity_processes()
+            if current_mains or current_engines:
+                print('[RESTART] Refused: primary app or writer appeared during shutdown', flush=True)
+                return False
+            env = dict(os.environ)
+            env.setdefault('GOMEMLIMIT', '3GiB')
+            env.setdefault('GOGC', '50')
+            subprocess.Popen([exe], env=env, creationflags=0x00000008 | 0x00000200 | 0x08000000)
+            return True
+        except Exception as error:
+            print(f'[RESTART] Safe restart did not complete: {error}', flush=True)
+            return False
+    if sys_name == 'macos':
+        result = subprocess.run(['osascript', '-e', 'tell application "Antigravity" to quit'], capture_output=True)
+        if result.returncode != 0:
+            return False
         subprocess.Popen(['open', '/Applications/Antigravity.app'])
+        return True
+    return False
+
+
+def restart_after_account_switch():
+    """A launcher being accepted does not establish engine readiness or fresh auth."""
+    try:
+        launched = restart_antigravity() is True
+    except Exception as error:
+        print(f'[RESTART] Safe restart raised {type(error).__name__}', flush=True)
+        launched = False
+    result = {'requested': True, 'launched': launched, 'completed': False,
+              'status': 'launch_requested' if launched else 'refused'}
+    if not launched:
+        result['error'] = 'Safe restart did not complete; see the restart log for the reason.'
+    print(f"[RESTART RESULT] {result['status']}", flush=True)
+    return result
+
 
 def write_token_to_credential_manager(token):
     sys_name = quota_engine.get_current_system()
+    if isinstance(token, dict):
+        token_payload = dict(token)
+    elif isinstance(token, str) and token.strip().startswith('{'):
+        try:
+            token_payload = json.loads(token.strip())
+        except Exception:
+            token_payload = None
+    else:
+        token_payload = None
+
+    if token_payload:
+        if 'auth_method' not in token_payload:
+            token_payload['auth_method'] = 'consumer'
+        t_obj = token_payload.get('token', token_payload)
+        if isinstance(t_obj, dict) and t_obj.get('expiry'):
+            exp = t_obj['expiry']
+            if '+00:00' in exp:
+                t_obj['expiry'] = exp.replace('+00:00', 'Z')
+        token_str = json.dumps(token_payload, ensure_ascii=False)
+    else:
+        token_str = str(token).strip()
+
     if sys_name == 'windows':
         import ctypes
         from ctypes import wintypes
@@ -198,22 +456,22 @@ def write_token_to_credential_manager(token):
         CredWrite.argtypes = [PCREDENTIAL, wintypes.DWORD]
         CredWrite.restype = wintypes.BOOL
 
-        raw_bytes = token.encode('utf-8')
+        raw_bytes = token_str.encode('utf-8')
         buf = (ctypes.c_byte * len(raw_bytes))(*raw_bytes)
 
-        for target in ['gemini:antigravity', 'gemini']:
+        for target in ['gemini:antigravity', 'gemini', 'antigravity']:
             cred = CREDENTIAL()
             cred.Flags = 0
-            cred.Type = 1
+            cred.Type = 1  # CRED_TYPE_GENERIC
             cred.TargetName = target
             cred.UserName = 'antigravity'
             cred.CredentialBlobSize = len(raw_bytes)
             cred.CredentialBlob = ctypes.cast(buf, ctypes.POINTER(ctypes.c_byte))
-            cred.Persist = 2
+            cred.Persist = 2  # CRED_PERSIST_LOCAL_MACHINE
             CredWrite(ctypes.byref(cred), 0)
 
     elif sys_name == 'macos':
-        subprocess.run(['security', 'add-generic-password', '-U', '-s', 'gemini', '-a', 'antigravity', '-w', token])
+        subprocess.run(['security', 'add-generic-password', '-U', '-s', 'gemini', '-a', 'antigravity', '-w', token_str])
 
 _launch_dual_lock = threading.Lock()
 _last_dual_launch_time = 0
@@ -500,8 +758,21 @@ def launch_dual_instance(account_key, project_path=None):
                 'error': f"توکن ذخیره شده متعلق به '{token_email}' است و با حساب '{account_key}' تطابق ندارد. لطفاً روی دکمه ورود با گوگل کلیک کنید."
             }
 
+        has_aicode = quota_engine.check_token_has_aicode(target_token)
+        if not has_aicode:
+            entry['needs_reauth'] = True
+            manifest[account_key] = entry
+            save_manifest(manifest)
+            return {
+                'success': False,
+                'needs_reauth': True,
+                'missing_aicode': True,
+                'account': account_key,
+                'error': f"حساب '{account_key}' با مجوزهای قدیمی ثبت شده و دسترسی لازم برای مدل‌های هوش مصنوعی (aicode) را ندارد. لطفاً یک‌بار روی دکمه ورود با گوگل کلیک کنید تا دسترسی فعال شود."
+            }
+
         # Ensure target token is 100% fresh and has valid access_token
-        target_token = quota_engine.ensure_fresh_token(target_token, account_email=account_key)
+        target_token = quota_engine.ensure_fresh_token(target_token, account_email=account_key, force_refresh=True)
             
         sys_name = quota_engine.get_current_system()
         inst_id, target_inst_dir = get_instance_dir_for_account(account_key)
@@ -709,7 +980,8 @@ def launch_dual_instance(account_key, project_path=None):
         else:
             return {'success': False, 'error': 'Multi-instance launch is optimized for Windows/macOS'}
 
-def switch_account(account_key, no_restart=False):
+def switch_account(account_key, no_restart=True):
+    sys_name = quota_engine.get_current_system()
     manifest = load_manifest()
     entry = manifest.get(account_key)
     if not entry:
@@ -737,7 +1009,20 @@ def switch_account(account_key, no_restart=False):
             'error': f"توکن ذخیره شده متعلق به '{token_email}' است و با حساب '{account_key}' تطابق ندارد. لطفاً روی دکمه ورود با گوگل کلیک کنید."
         }
 
-    token = quota_engine.ensure_fresh_token(token, account_email=account_key)
+    has_aicode = quota_engine.check_token_has_aicode(token)
+    if not has_aicode:
+        entry['needs_reauth'] = True
+        manifest[account_key] = entry
+        save_manifest(manifest)
+        return {
+            'success': False,
+            'needs_reauth': True,
+            'missing_aicode': True,
+            'account': account_key,
+            'error': f"حساب '{account_key}' با مجوزهای قدیمی ثبت شده و دسترسی لازم برای مدل‌های هوش مصنوعی (aicode) را ندارد. لطفاً یک‌بار روی دکمه ورود با گوگل کلیک کنید تا دسترسی فعال شود."
+        }
+
+    token = quota_engine.ensure_fresh_token(token, account_email=account_key, force_refresh=True)
     write_token_to_credential_manager(token)
 
     email = entry.get('email', account_key)
@@ -759,6 +1044,7 @@ def switch_account(account_key, no_restart=False):
         'pools': [
             {'name': 'Gemini 3.8 Flash High', 'used_pct': round(100.0 - rem, 1), 'remaining_pct': round(rem, 1), 'resets_in': 'Ready'},
             {'name': 'Gemini 3.1 Pro', 'used_pct': round(100.0 - rem, 1), 'remaining_pct': round(rem, 1), 'resets_in': 'Ready'},
+            {'name': 'Argon', 'used_pct': 100.0, 'remaining_pct': 0.0, 'resets_in': '4 d', 'weekly_rem': 0.0, 'weekly_pct': 100.0, 'weekly_resets': '4 d'},
             {'name': 'Claude Sonnet 4.6', 'used_pct': 0.0, 'remaining_pct': 100.0, 'resets_in': 'Ready'},
             {'name': 'GPT-OSS 120B', 'used_pct': 0.0, 'remaining_pct': 100.0, 'resets_in': 'Ready'}
         ]
@@ -809,9 +1095,18 @@ def switch_account(account_key, no_restart=False):
     except Exception:
         pass
 
+    try:
+        ensure_daemon_running()
+    except Exception:
+        pass
+
+    result = {'success': True, 'account': account_key, 'quota': quota_data,
+              'restart': {'requested': False, 'launched': False, 'completed': False, 'status': 'not_requested'}}
     if not no_restart:
-        restart_antigravity()
-    return {'success': True, 'account': account_key, 'quota': quota_data}
+        result['restart'] = restart_after_account_switch()
+        if result['restart']['status'] == 'refused':
+            result['warning'] = 'حساب تغییر یافت؛ راه‌اندازی مجدد ایمن انجام نشد. وضعیت برنامه را بررسی کنید.'
+    return result
 
 def save_current_account():
     token = quota_engine.get_keychain_token()
@@ -979,6 +1274,16 @@ def open_browser_url(url):
     except Exception:
         return False
 
+ANTIGRAVITY_OAUTH_SCOPES = (
+    "openid email profile "
+    "https://www.googleapis.com/auth/cloud-platform "
+    "https://www.googleapis.com/auth/userinfo.email "
+    "https://www.googleapis.com/auth/userinfo.profile "
+    "https://www.googleapis.com/auth/aicode "
+    "https://www.googleapis.com/auth/cclog "
+    "https://www.googleapis.com/auth/experimentsandconfigs"
+)
+
 def run_google_oauth_flow(target_account=None, on_url=None, on_complete=None):
     import urllib.parse
     import urllib.request
@@ -989,7 +1294,7 @@ def run_google_oauth_flow(target_account=None, on_url=None, on_complete=None):
 
     port = find_free_port()
     redirect_uri = f"http://localhost:{port}/oauth2callback"
-    scope = "openid email profile https://www.googleapis.com/auth/cloud-platform"
+    scope = ANTIGRAVITY_OAUTH_SCOPES
     params = {
         "client_id": quota_engine.OAUTH_CLIENT_ID,
         "redirect_uri": redirect_uri,
@@ -1049,7 +1354,8 @@ def run_google_oauth_flow(target_account=None, on_url=None, on_complete=None):
                                 "access_token": access_tok,
                                 "token_type": tok_data.get("token_type", "Bearer"),
                                 "refresh_token": refresh_tok,
-                                "expiry": exp_iso
+                                "expiry": exp_iso,
+                                "scope": tok_data.get("scope", ANTIGRAVITY_OAUTH_SCOPES)
                             },
                             "auth_method": "consumer",
                             "id_token": tok_data.get("id_token")
@@ -1234,11 +1540,13 @@ class SwitcherHTTPHandler(SimpleHTTPRequestHandler):
                         pass
                 if not inst_acc or inst_acc not in saved:
                     # Match by instance_id in saved manifest
-                    inst_acc = next((k for k, v in saved.items() if v.get('instance_id') == f"instance_{slot_idx}"), None)
-                if not inst_acc and slot_idx == 4 and 'nabistudii0@gmail.com' in saved:
-                    inst_acc = 'nabistudii0@gmail.com'
+                    for s_k, s_v in saved.items():
+                        if s_v.get('instance_id') == req_inst:
+                            inst_acc = s_k
+                            break
                 if not inst_acc:
-                    inst_acc = next((k for k in saved.keys() if k != 'madgod.cum@gmail.com'), None)
+                    primary = get_primary_account()
+                    inst_acc = next((k for k in saved.keys() if k != primary), None)
 
                 entry = saved.get(inst_acc, {}) if inst_acc else {}
                 tok_file = entry.get('token_file', '')
@@ -1296,6 +1604,49 @@ class SwitcherHTTPHandler(SimpleHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps(load_user_settings(), ensure_ascii=False).encode('utf-8'))
+        elif parsed.path == '/api/chatgpt/status':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            import chatgpt_account_manager as cpm
+            meta = cpm.list_profiles()
+            settings = cpm.load_settings()
+            self.wfile.write(json.dumps({'status': 'ok', 'profiles': meta, 'settings': settings}, ensure_ascii=False).encode('utf-8'))
+        elif parsed.path == '/api/chatgpt/launch':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            qs = urllib.parse.parse_qs(parsed.query)
+            inst = int(qs.get('instance', ['1'])[0])
+            new_win = qs.get('new_window', ['0'])[0] in ('1', 'true')
+            import chatgpt_account_manager as cpm
+            ok, msg = cpm.launch_chatgpt(instance_num=inst, new_window=new_win)
+            self.wfile.write(json.dumps({'success': ok, 'message': msg}, ensure_ascii=False).encode('utf-8'))
+        elif parsed.path == '/api/chatgpt/login':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            qs = urllib.parse.parse_qs(parsed.query)
+            mode = qs.get('mode', ['oauth'])[0]
+            api_key = qs.get('api_key', [None])[0]
+            import chatgpt_account_manager as cpm
+            ok, msg = cpm.trigger_codex_login(mode=mode, api_key=api_key)
+            if isinstance(msg, dict):
+                resp = {'success': ok, 'auth_url': msg.get('auth_url'), 'message': msg.get('message', '')}
+            else:
+                resp = {'success': ok, 'message': str(msg)}
+            self.wfile.write(json.dumps(resp, ensure_ascii=False).encode('utf-8'))
+        elif parsed.path == '/api/chatgpt/logout':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json; charset=utf-8')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            import chatgpt_account_manager as cpm
+            ok, msg = cpm.trigger_codex_logout()
+            self.wfile.write(json.dumps({'success': ok, 'message': msg}, ensure_ascii=False).encode('utf-8'))
         elif parsed.path in ('/api/launch_dual', '/api/launch_instance'):
             self.send_response(200)
             self.send_header('Content-Type', 'application/json; charset=utf-8')
@@ -1331,7 +1682,7 @@ class SwitcherHTTPHandler(SimpleHTTPRequestHandler):
             resp = {'success': ok, 'settings': res}
         elif self.path == '/api/switch':
             acc_key = data.get('accountKey')
-            resp = switch_account(acc_key, no_restart=data.get('noRestart', False))
+            resp = switch_account(acc_key, no_restart=data.get('noRestart', True))
         elif self.path in ('/api/launch_dual', '/api/launch_instance'):
             acc_key = data.get('accountKey') or data.get('account') or data.get('email')
             project_path = data.get('projectPath') or data.get('path')
@@ -1398,6 +1749,40 @@ class SwitcherHTTPHandler(SimpleHTTPRequestHandler):
             acc = data.get('account')
             act = data.get('action', 'add')
             resp = migration_engine.assign_conversation_account(c_id, acc, action=act)
+        elif self.path == '/api/chatgpt/switch':
+            import chatgpt_account_manager as cpm
+            profile_id = data.get('profile_id') or data.get('profileId')
+            if profile_id:
+                ok, msg = cpm.switch_profile(profile_id)
+                resp = {'success': ok, 'message': msg}
+            else:
+                resp = {'success': False, 'error': 'Missing profile_id'}
+        elif self.path == '/api/chatgpt/save_profile':
+            import chatgpt_account_manager as cpm
+            p_id = data.get('profile_id') or data.get('profileId')
+            name = data.get('display_name') or data.get('name')
+            if p_id:
+                ok, res = cpm.save_current_profile(p_id, display_name=name)
+                resp = {'success': ok, 'data': res}
+            else:
+                resp = {'success': False, 'error': 'Missing profile_id'}
+        elif self.path == '/api/chatgpt/settings':
+            import chatgpt_account_manager as cpm
+            ok, res = cpm.save_settings(data)
+            resp = {'success': ok, 'settings': res}
+        elif self.path == '/api/chatgpt/login':
+            import chatgpt_account_manager as cpm
+            mode = data.get('mode', 'oauth')
+            api_key = data.get('api_key')
+            ok, msg = cpm.trigger_codex_login(mode=mode, api_key=api_key)
+            if isinstance(msg, dict):
+                resp = {'success': ok, 'auth_url': msg.get('auth_url'), 'message': msg.get('message', '')}
+            else:
+                resp = {'success': ok, 'message': str(msg)}
+        elif self.path == '/api/chatgpt/logout':
+            import chatgpt_account_manager as cpm
+            ok, msg = cpm.trigger_codex_logout()
+            resp = {'success': ok, 'message': msg}
 
         self.send_response(200)
         self.send_header('Content-Type', 'application/json; charset=utf-8')
@@ -1417,6 +1802,7 @@ def start_server(port=PORT):
     while is_port_in_use(actual_port):
         actual_port += 1
 
+    threading.Thread(target=ensure_daemon_running, daemon=True).start()
     server = ThreadingHTTPServer(('127.0.0.1', actual_port), SwitcherHTTPHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
@@ -1461,7 +1847,7 @@ def launch_gui(port=PORT):
 
 if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] in ('--launch', '--launch-instance', '--focus'):
-        target = sys.argv[2] if len(sys.argv) > 2 else 'nabistudii0@gmail.com'
+        target = sys.argv[2] if len(sys.argv) > 2 else get_secondary_account()
         res = launch_dual_instance(target)
         print(f"Multi-instance launch result for {target}: {res}")
         sys.exit(0 if res.get('success') else 1)

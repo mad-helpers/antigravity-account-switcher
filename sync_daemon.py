@@ -558,7 +558,7 @@ def sync_quota_once(force=False, inject=False):
         if getattr(srv_mod, 'is_dual_launching', lambda: False)():
             return _cached_usage or {}
 
-        usage = quota_engine.fetch_quota()
+        usage = quota_engine.fetch_quota(force_refresh=force)
         if not usage or not usage.get("session"):
             return _cached_usage or {}
 
@@ -740,6 +740,7 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
+        import urllib.parse
         try:
             import server as srv_mod
             if self.path.startswith('/sync') or self.path.startswith('/quota') or self.path.startswith('/api/quota'):
@@ -943,26 +944,20 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
             global _cached_account_info
             if self.path == '/api/switch':
                 acc_key = data.get('accountKey')
-                no_restart = data.get('noRestart', False)
+                no_restart = data.get('noRestart', True)
                 resp = srv_mod.switch_account(acc_key, no_restart=True)
                 if resp.get('success'):
+                    resp['restart'] = {'requested': not bool(no_restart), 'launched': False, 'completed': False,
+                                       'status': 'pending' if not no_restart else 'not_requested'}
                     _cached_account_info = resp.get('quota')
                     _cached_account_time = time.time()
-                    if _active_cdp_ws and _active_cdp_loop:
-                        try:
-                            asyncio.run_coroutine_threadsafe(
-                                cdp_broadcast_state(_active_cdp_ws, {
-                                    "msg": f"حساب به {acc_key} تغییر یافت. در حال راه‌اندازی مجدد...",
-                                    "isErr": False
-                                }),
-                                _active_cdp_loop
-                            )
-                        except Exception:
-                            pass
+                    broadcast_all_instances({
+                        "msg": f"حساب به {acc_key} تغییر یافت.",
+                        "isErr": False, "restart": resp["restart"]
+                    }, target_account=acc_key)
                     if not no_restart:
                         def do_restart():
-                            time.sleep(0.8)
-                            srv_mod.restart_antigravity()
+                            _restart_switched_account(srv_mod)
                         threading.Thread(target=do_restart, daemon=True).start()
                 else:
                     _cached_account_info = None
@@ -1136,7 +1131,7 @@ async def cdp_broadcast_state(ws, extra_toast=None, instance_id="instance_1", ac
         import migration_engine as m_eng
         manifest = srv.load_manifest()
 
-        target_account = get_instance_active_account(instance_id) or account_email
+        target_account = account_email or get_instance_active_account(instance_id)
         if not target_account or target_account not in manifest:
             target_account = get_primary_account()
         with _cdp_conns_lock:
@@ -1199,18 +1194,37 @@ async def cdp_broadcast_state(ws, extra_toast=None, instance_id="instance_1", ac
     except Exception as e:
         print(f"[CDP STATE ERROR] [{instance_id}] {e}", flush=True)
 
-def broadcast_all_instances(extra_toast=None):
+def broadcast_all_instances(extra_toast=None, target_account=None):
     with _cdp_conns_lock:
         conns = list(_active_cdp_connections.values())
     for c in conns:
         try:
             if c.get("ws") and c.get("loop"):
+                acc = target_account or c.get("account")
                 asyncio.run_coroutine_threadsafe(
-                    cdp_broadcast_state(c["ws"], extra_toast=extra_toast, instance_id=c.get("instance_id", "instance_1"), account_email=c.get("account")),
+                    cdp_broadcast_state(c["ws"], extra_toast=extra_toast, instance_id=c.get("instance_id", "instance_1"), account_email=acc),
                     c["loop"]
                 )
         except Exception:
             pass
+
+def _restart_switched_account(srv):
+    """Finish an explicitly requested restart and publish its independent outcome."""
+    time.sleep(0.8)  # Let the successful account-switch response reach its caller.
+    try:
+        result = srv.restart_after_account_switch()
+    except Exception as error:
+        result = {'requested': True, 'launched': False, 'completed': False, 'status': 'refused',
+                  'error': 'Restart worker failed: ' + type(error).__name__}
+    log('[RESTART RESULT] ' + json.dumps(result, ensure_ascii=False))
+    launched = result.get('launched') is True and result.get('status') == 'launch_requested'
+    broadcast_all_instances({
+        'msg': 'حساب تغییر یافت؛ اجرای برنامه درخواست شد. آماده‌بودن برنامه هنوز تأیید نشده است.' if launched else
+               'حساب تغییر یافت؛ راه‌اندازی مجدد ایمن انجام نشد. وضعیت برنامه را بررسی کنید.',
+        'isErr': not launched, 'restart': result
+    })
+    return result
+
 
 async def cdp_handle_action(ws, action, data, instance_id="instance_1", default_account=None):
     try:
@@ -1227,26 +1241,30 @@ async def cdp_handle_action(ws, action, data, instance_id="instance_1", default_
             })
         elif action == "switch":
             acc_key = data.get("accountKey")
-            no_restart = data.get("noRestart", False)
+            no_restart = data.get("noRestart", True)
             log(f"[CDP SWITCH] Target: {acc_key}")
             res = srv.switch_account(acc_key, no_restart=True)
             if res.get("success"):
+                res["restart"] = {"requested": not bool(no_restart), "launched": False, "completed": False,
+                                  "status": "pending" if not no_restart else "not_requested"}
                 quota_d = res.get("quota")
                 global _cached_account_info, _cached_account_time
                 _cached_account_info = quota_d
                 _cached_account_time = time.time()
+                with _cdp_conns_lock:
+                    if instance_id in _active_cdp_connections:
+                        _active_cdp_connections[instance_id]["account"] = acc_key
                 broadcast_all_instances({
-                    "msg": f"حساب به {acc_key} تغییر یافت. در حال راه‌اندازی مجدد...",
-                    "isErr": False
-                })
+                    "msg": f"حساب به {acc_key} تغییر یافت.",
+                    "isErr": False, "restart": res["restart"]
+                }, target_account=acc_key)
                 if not no_restart:
                     def do_restart():
-                        time.sleep(0.8)
-                        srv.restart_antigravity()
+                        _restart_switched_account(srv)
                     threading.Thread(target=do_restart, daemon=True).start()
             if not res.get("success"):
                 if res.get("needs_reauth"):
-                    start_shared_oauth_flow(target_account=target_key)
+                    start_shared_oauth_flow(target_account=acc_key)
                 await cdp_broadcast_state(ws, {"msg": res.get("error") or "خطا در جابجایی حساب", "isErr": True}, instance_id=instance_id, account_email=default_account)
         elif action == "import":
             tok = (data.get("token") or "").replace("\r", "").replace("\n", "").strip()
@@ -1540,26 +1558,28 @@ def start_cdp_supervisor():
     asyncio.set_event_loop(loop)
     loop.run_until_complete(cdp_supervisor_loop())
 
-def kill_other_daemon_instances():
+def acquire_daemon_lock(path=None):
+    """Keep one service per user store; never terminate another process."""
+    path = Path(path) if path is not None else Path.home() / ".gemini" / "antigravity" / "quota_daemon.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a+b")
     try:
-        import psutil
-        my_pid = os.getpid()
-        for p in psutil.process_iter(['pid', 'name', 'cmdline']):
-            if p.info['pid'] == my_pid:
-                continue
-            cmd = p.info.get('cmdline') or []
-            cmd_str = " ".join(cmd).lower()
-            if 'sync_daemon.py' in cmd_str and ('python' in (p.info.get('name') or '').lower()):
-                try:
-                    p.terminate()
-                    p.wait(timeout=2)
-                except Exception:
-                    try:
-                        p.kill()
-                    except Exception:
-                        pass
-    except Exception:
-        pass
+        handle.seek(0, 2)
+        if handle.tell() == 0:
+            handle.write(b"0")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return handle
+    except OSError:
+        handle.close()
+        return None
+
 
 def refresh_all_accounts_tokens():
     try:
@@ -1622,9 +1642,37 @@ def refresh_all_accounts_tokens():
     except Exception:
         pass
 
+def start_optional_theme_service(config_path=None):
+    """Only attach the existing theme injector; never launch or close an app."""
+    config_path = Path(config_path) if config_path is not None else Path.home() / '.gemini' / 'antigravity' / 'theme_services.json'
+    try:
+        config = json.loads(config_path.read_text(encoding='utf-8'))
+        if not isinstance(config, dict) or config.get('codex_theme') is not True:
+            return
+    except (OSError, ValueError):
+        return
+    def supervise():
+        while True:
+            try:
+                helper_dir = str(Path.home() / '.gemini' / 'antigravity' / 'bin')
+                if helper_dir not in sys.path:
+                    sys.path.append(helper_dir)
+                import chatgpt_cdp_daemon
+                asyncio.run(chatgpt_cdp_daemon.daemon_loop(ports=[9223, 9224], poll_interval=1.0))
+            except Exception:
+                log('[THEME] Passive Codex theme connection failed; retrying.')
+                time.sleep(3)
+    threading.Thread(target=supervise, daemon=True).start()
+    log('[THEME] Passive Codex theme service enabled; automatic app relaunch is disabled.')
+
+
 def daemon_loop():
-    kill_other_daemon_instances()
-    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [INFO] Antigravity Quota Monitor on-demand daemon active.", flush=True)
+    owner_lock = acquire_daemon_lock()
+    if owner_lock is None:
+        log("[INFO] Existing service owns this store; leaving it running.")
+        return
+    print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] [INFO] Quota Monitor active; automatic application restarts disabled.", flush=True)
+    start_optional_theme_service()
     # Start on-demand local HTTP server
     t = threading.Thread(target=start_http_server, daemon=True)
     t.start()

@@ -250,7 +250,7 @@ def find_account_key(target):
             
     return None
 
-def cmd_switch(account_arg, no_restart=False):
+def cmd_switch(account_arg, no_restart=True):
     """Switch active Antigravity account token."""
     account_key = find_account_key(account_arg)
     if not account_key:
@@ -262,10 +262,15 @@ def cmd_switch(account_arg, no_restart=False):
     res = server.switch_account(account_key, no_restart=no_restart)
     if res.get('success'):
         print(f"{BRIGHT_GREEN}✓ Successfully switched active account to {BOLD}{account_key}{RESET}!")
+        restart = res.get('restart') or {}
         if no_restart:
-            print(f"{DIM}Note: Restart was skipped (--no-restart). Token updated in Credential Manager.{RESET}")
+            print(f"{DIM}Restart skipped (default; use --restart to request a graceful relaunch).{RESET}")
+        elif restart.get('launched') is True and restart.get('status') == 'launch_requested':
+            print(f"{DIM}Antigravity launch requested after graceful shutdown; application startup is not verified.{RESET}")
         else:
-            print(f"{DIM}Antigravity process restarted and loaded fresh credentials.{RESET}")
+            print(f"{YELLOW}Account switched; safe restart was not completed. Check the application and restart log.{RESET}")
+            print()
+            return 2
         print()
         return 0
     else:
@@ -452,15 +457,16 @@ def print_help():
   {BRIGHT_GREEN}--save, save{RESET}                         Save current active session to manifest
   {BRIGHT_GREEN}--logout, logout{RESET}                     Log out from active account to sign into a new one
   {BRIGHT_GREEN}--gui, gui{RESET}                           Launch the iOS Liquid Glass GUI
-  {BRIGHT_GREEN}--no-restart{RESET}                         Skip restarting the IDE when switching accounts
+  {BRIGHT_GREEN}--restart{RESET}                            Request a graceful IDE restart after switching
+  {BRIGHT_GREEN}--no-restart{RESET}                         Skip restarting the IDE (default; retained for compatibility)
   {BRIGHT_GREEN}--help, -h{RESET}                           Show this help message
 
 {BOLD}EXAMPLES:{RESET}
   agy-quota
   agy-switch --list
-  agy-switch --switch bombhub.apk@gmail.com
+  agy-switch --switch developer@example.com
   agy-switch --switch instance_2 --no-restart
-  agy-switch --set-project-quota "gravity suitch accont" bombhub.apk@gmail.com
+  agy-switch --set-project-quota "my-project" developer@example.com
   agy-switch --launch-instance instance_2
   agy-switch --status-json
 """)
@@ -471,12 +477,15 @@ def main():
         # Default behavior with no arguments: open the Liquid Glass GUI
         return cmd_gui()
 
-    # Extract global flags like --no-restart
-    no_restart = '--no-restart' in raw_args
-    filtered_args = [a for a in raw_args if a != '--no-restart']
+    # Account switches preserve the running IDE unless restart is explicit.
+    if '--restart' in raw_args and '--no-restart' in raw_args:
+        print(f"{RED}Choose either --restart or --no-restart, not both.{RESET}")
+        return 1
+    no_restart = '--restart' not in raw_args
+    filtered_args = [a for a in raw_args if a not in ('--restart', '--no-restart')]
 
     if not filtered_args:
-        print(f"{RED}❌ Please specify a command or account along with --no-restart.{RESET}")
+        print(f"{RED}❌ Please specify a command or account along with the restart option.{RESET}")
         return 1
 
     first = filtered_args[0].lower().strip()
@@ -494,14 +503,14 @@ def main():
     if first in ('-s', '--switch', 'switch'):
         if len(filtered_args) < 2:
             print(f"{RED}❌ Please specify the account email or alias to switch to.{RESET}")
-            print("Example: agy-switch --switch bombhub.apk@gmail.com")
+            print("Example: agy-switch --switch developer@example.com")
             return 1
         return cmd_switch(filtered_args[1], no_restart=no_restart)
 
     if first in ('--set-project-quota', 'set-project-quota', 'set-quota', '--set-quota'):
         if len(filtered_args) < 3:
             print(f"{RED}❌ Please provide both <project_id_or_path> and <account_email>.{RESET}")
-            print("Example: agy-switch --set-project-quota \"gravity suitch accont\" bombhub.apk@gmail.com")
+            print("Example: agy-switch --set-project-quota \"my-project\" developer@example.com")
             return 1
         return cmd_set_project_quota(filtered_args[1], filtered_args[2])
 
@@ -523,6 +532,10 @@ def main():
 
     if first in ('--gui', 'gui'):
         return cmd_gui()
+
+    if first in ('--ide-theme', 'ide-theme', '--setup-ide', 'setup-ide'):
+        import setup_ide_theme
+        return 0 if setup_ide_theme.setup_ide_theme() else 1
 
     # If first argument looks like an email or known account or instance alias, treat as switch
     matched = find_account_key(filtered_args[0])

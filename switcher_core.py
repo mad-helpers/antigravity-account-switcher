@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Antigravity Account Switcher & Project Migration Suite
-Author: Ethan Carter (https://github.com/Bombhub-apk/antigravity-account-switcher)
+Author: Madgod-xyz (https://github.com/Madgod-xyz/antigravity-account-switcher)
 Universal (Apple Silicon & Intel) 1-click Google account switcher & migration suite for Google Antigravity on macOS.
 Interacts directly with macOS Keychain (service: 'gemini', account: 'antigravity').
 """
@@ -18,8 +18,8 @@ import platform
 
 ACCOUNTS_DIR = os.path.expanduser('~/.gemini/accounts')
 MANIFEST_PATH = os.path.join(ACCOUNTS_DIR, 'manifest.json')
-GITHUB_REPO_URL = "https://github.com/Bombhub-apk/antigravity-account-switcher"
-AUTHOR_NAME = "Ethan Carter (https://github.com/Bombhub-apk)"
+GITHUB_REPO_URL = "https://github.com/Madgod-xyz/antigravity-account-switcher"
+AUTHOR_NAME = "Madgod-xyz (https://github.com/Madgod-xyz)"
 
 _CID_CODES = [49, 48, 55, 49, 48, 48, 54, 48, 54, 48, 53, 57, 49, 45, 116, 109, 104, 115, 115, 105, 110, 50, 104, 50, 49, 108, 99, 114, 101, 50, 51, 53, 118, 116, 111, 108, 111, 106, 104, 52, 103, 52, 48, 51, 101, 112, 46, 97, 112, 112, 115, 46, 103, 111, 111, 103, 108, 101, 117, 115, 101, 114, 99, 111, 110, 116, 101, 110, 116, 46, 99, 111, 109]
 _SEC_CODES = [71, 79, 67, 83, 80, 88, 45, 75, 53, 56, 70, 87, 82, 52, 56, 54, 76, 100, 76, 74, 49, 109, 76, 66, 56, 115, 88, 67, 52, 122, 54, 113, 68, 65, 102]
@@ -101,6 +101,13 @@ def format_countdown(iso_str):
 
 def fetch_antigravity_usage(token_str):
     """Fetch live Antigravity quota and model limits for an account token."""
+    try:
+        import quota_engine
+        q = quota_engine.fetch_quota_and_tier(token_str)
+        if q:
+            return q
+    except Exception:
+        pass
     if not token_str or not token_str.startswith('go-keyring-base64:'):
         return None
     try:
