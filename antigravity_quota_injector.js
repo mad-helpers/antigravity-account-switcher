@@ -3455,16 +3455,7 @@
                             <button class="aqm-sw-btn aqm-sw-btn-primary" data-action="switch" data-acc="${k}" style="padding:3px 10px;font-size:11px;">
                               <span>${t.switchNow || (isFa ? 'سوئیچ' : 'Switch')}</span>
                             </button>
-                            ${(() => {
-                              const runningAccs = Object.values(swState.runningAccounts || {});
-                              const isWinRunning = runningAccs.includes(k) || runningAccs.includes(accEmailStr);
-                              return `
-                                <button class="aqm-sw-btn" data-action="launch-dual" data-acc="${k}" data-account="${k}" data-email="${accEmailStr}" title="${isWinRunning ? (isFa ? 'انتقال به پنجره باز این حساب' : 'Focus window of this account') : (isFa ? 'باز کردن در پنجره همزمان مجزا' : 'Open concurrently in separate window')}" style="padding:3px 8px;font-size:11px;background:${isWinRunning ? 'rgba(16,185,129,0.15)' : 'rgba(59,130,246,0.15)'};border:1px solid ${isWinRunning ? 'rgba(16,185,129,0.4)' : 'rgba(59,130,246,0.3)'};color:${isWinRunning ? '#34d399' : '#60a5fa'};display:inline-flex;align-items:center;gap:3px;cursor:pointer;">
-                                  <span>${isWinRunning ? '🪟 ' + (isFa ? 'فوکوس پنجره' : 'Focus Window') : '⚡️ ' + (isFa ? 'پنجره جدید' : 'New Window')}</span>
-                                </button>
-                              `;
-                            })()}
-                          `}
+                                                      `}
                           <button class="aqm-sw-btn" data-action="delete" data-acc="${k}" title="${t.deleteAccount || (isFa ? 'حذف از لیست' : 'Delete')}" style="padding:3px 7px;font-size:10.5px;color:#94a3b8;border-color:transparent;background:transparent;">
                             <span>✕</span>
                           </button>
