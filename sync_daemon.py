@@ -1439,7 +1439,9 @@ async def cdp_instance_worker(instance_id, port, default_account):
         with urllib.request.urlopen(req, timeout=2) as resp:
             targets = json.loads(resp.read().decode())
 
-        page = next((t for t in targets if t.get("type") == "page" and "about:blank" not in t.get("url", "")), None)
+        page = next((t for t in targets if t.get("type") == "page" and not t.get("url", "").startswith("data:") and "about:blank" not in t.get("url", "")), None)
+        if not page:
+            page = next((t for t in targets if t.get("type") == "page" and "about:blank" not in t.get("url", "")), None)
         if not page:
             page = next((t for t in targets if t.get("type") == "page"), None)
         if not page or not page.get("webSocketDebuggerUrl"):

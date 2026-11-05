@@ -528,7 +528,9 @@ def focus_instance(inst_dir):
                     req = urllib.request.Request(f"http://127.0.0.1:{port}/json/list")
                     with urllib.request.urlopen(req, timeout=1.0) as resp:
                         targets = json.loads(resp.read().decode('utf-8'))
-                    page = next((t for t in targets if t.get("type") == "page" and "about:blank" not in t.get("url", "")), None)
+                    page = next((t for t in targets if t.get("type") == "page" and not t.get("url", "").startswith("data:") and "about:blank" not in t.get("url", "")), None)
+                    if not page:
+                        page = next((t for t in targets if t.get("type") == "page" and "about:blank" not in t.get("url", "")), None)
                     if not page:
                         page = next((t for t in targets if t.get("type") == "page"), None)
                     if page and page.get("webSocketDebuggerUrl"):
