@@ -1,5 +1,5 @@
 (() => {
-  const runtimeRevision = '20261104.17';
+  const runtimeRevision = '20261105.2';
   const runtimeSettings = JSON.stringify(window.__antigravity_user_settings || {});
   const runtimeAccount = window.__antigravity_account || '';
   // A routine quota refresh must preserve open panels, focus, and pending input.
@@ -3283,21 +3283,10 @@
 
         <!-- Tab Navigation Bar (Liquid Glass Pill Tabs) -->
         <div style="display:flex;gap:6px;padding:8px 18px;border-bottom:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.12);overflow-x:auto;flex-shrink:0;" class="aqm-custom-scroll">
-          <button class="aqm-sw-tab-btn ${swTab === 'accounts' ? 'active' : ''}" id="aqm-tab-btn-accounts">
+          <button class="aqm-sw-tab-btn active" id="aqm-tab-btn-accounts">
             <span>👤</span>
-            <span>${t.tabAccounts || 'Accounts'}</span>
+            <span>${t.tabAccounts || (isFa ? 'حساب‌ها و سهمیه' : 'Accounts & Quota')}</span>
           </button>
-          <button class="aqm-sw-tab-btn ${swTab === 'projects' ? 'active' : ''}" id="aqm-tab-btn-projects">
-            <span>📁</span>
-            <span>${t.tabProjects || 'Projects'}</span>
-            <span style="font-size:9px;padding:0 5px;border-radius:9999px;background:rgba(255,255,255,0.08);">${projectsList.length}</span>
-          </button>
-          <button class="aqm-sw-tab-btn ${swTab === 'tasks' ? 'active' : ''}" id="aqm-tab-btn-tasks">
-            <span>⏱</span>
-            <span>${t.tabTasks || 'Tasks'}</span>
-            <span style="font-size:9px;padding:0 5px;border-radius:9999px;background:rgba(255,255,255,0.08);">${tasksList.length}</span>
-          </button>
-
         </div>
 
         <!-- Content Body (Scrollable) -->
@@ -3486,227 +3475,6 @@
                 </div>
               `}
             </div>
-          ` : swTab === 'projects' ? `
-            <!-- PROJECTS TAB -->
-            <div style="display:flex;flex-direction:column;gap:10px;">
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 2px;">
-                <div style="font-size:11px;color:#94a3b8;line-height:1.5;">
-                  ${t.projectsDesc || (isFa ? 'مدیریت تفکیک و انتساب پروژه‌ها به حساب‌های کاربری فعال' : 'Manage project profiles and account assignments')}
-                </div>
-                <div style="display:flex;gap:6px;flex-shrink:0;">
-                  <button class="aqm-sw-btn" id="aqm-proj-allow-all-btn" style="padding:3px 8px;font-size:10.5px;color:#10b981;border-color:rgba(16,185,129,0.3);background:rgba(16,185,129,0.08);" title="${isFa ? 'فعال‌سازی تمام پروژه‌ها برای تمام حساب‌ها' : 'Enable all projects for all accounts'}">
-                    ✓ ${isFa ? 'همه اکانت‌ها' : 'All Accounts'}
-                  </button>
-                  <button class="aqm-sw-btn" id="aqm-proj-isolate-all-btn" style="padding:3px 8px;font-size:10.5px;color:#f87171;border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.08);" title="${isFa ? 'غیرفعال‌سازی همه پروژه‌ها' : 'Disable all projects'}">
-                    ✕ ${isFa ? 'غیرفعال‌سازی همه' : 'Disable All'}
-                  </button>
-                </div>
-              </div>
-              ${projectsList.length === 0 ? `
-                <div class="aqm-sw-card" style="text-align:center;padding:24px 14px;border-style:dashed;">
-                  <div style="font-size:11.5px;color:#94a3b8;">${t.noProjectsFound}</div>
-                </div>
-              ` : `
-                <div style="display:flex;flex-direction:column;gap:7px;max-height:360px;overflow-y:auto;" class="aqm-custom-scroll">
-                  ${projectsList.map(p => {
-                    const assigned = (p.assigned_accounts || []).map(a => String(a).toLowerCase().trim());
-                    const isAll = !!p.enabled_all || (savedKeys.length > 0 && savedKeys.every(k => assigned.includes(k.toLowerCase())));
-                    const isNone = !!p.disabled_all || assigned.length === 0;
-                    const docTitle = (typeof document !== 'undefined' && document.title) ? document.title : '';
-                    const titleParts = docTitle.split(' - ');
-                    const currentFolder = titleParts.length >= 2 ? titleParts[titleParts.length - 2].trim().toLowerCase() : '';
-                    const isCurrentWindowProject = Boolean(currentFolder && (
-                      (p.name && p.name.toLowerCase() === currentFolder) ||
-                      (p.id && p.id.toLowerCase() === currentFolder) ||
-                      (p.path && p.path.toLowerCase().replace(/\\/g, '/').endsWith('/' + currentFolder))
-                    ));
-                    return `
-                      <div class="aqm-sw-card" style="padding:10px 14px;display:flex;flex-direction:column;gap:8px;${isCurrentWindowProject ? 'border:1px solid rgba(56,189,248,0.45);box-shadow:0 0 10px rgba(56,189,248,0.15);background:rgba(56,189,248,0.03);' : ''}">
-                        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
-                          <div style="flex:1;min-width:0;">
-                            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;flex-wrap:wrap;">
-                              <span style="font-size:12.5px;font-weight:700;color:#f8fafc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.name || p.id}</span>
-                              ${isCurrentWindowProject ? `
-                                <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(56,189,248,0.2);color:#38bdf8;border:1px solid rgba(56,189,248,0.5);font-weight:700;">★ ${isFa ? 'پروژه جاری' : 'Active Window'}</span>
-                              ` : ''}
-                              ${isNone ? `
-                                <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(239,68,68,0.15);color:#f87171;border:1px solid rgba(239,68,68,0.3);">${isFa ? 'غیرفعال' : 'Disabled'}</span>
-                              ` : isAll ? `
-                                <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);">${isFa ? 'همه اکانت‌ها' : 'All Accounts'}</span>
-                              ` : `
-                                <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(59,130,246,0.15);color:#60a5fa;border:1px solid rgba(59,130,246,0.3);">${assigned.length} ${isFa ? 'اکانت' : 'accounts'}</span>
-                              `}
-                            </div>
-                            <div style="font-size:10px;color:#64748b;font-family:'JetBrains Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" dir="ltr" title="${p.path || ''}">
-                              ${p.path || p.id}
-                            </div>
-                            <div style="font-size:10px;color:#94a3b8;margin-top:3px;">
-                              💬 ${(p.conversations || []).length || p.conversation_count || 0} ${isFa ? 'مکالمه' : 'chats'}
-                            </div>
-                          </div>
-
-                          <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
-                            <button class="aqm-sw-btn aqm-proj-all-btn" data-pid="${p.id}" data-state="all" title="${isFa ? 'فعال برای تمام حساب‌ها' : 'Enable for all accounts'}" style="padding:3px 7px;font-size:10px;color:#10b981;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);">
-                              <span>✓ ${isFa ? 'همه' : 'All'}</span>
-                            </button>
-                            <button class="aqm-sw-btn aqm-proj-all-btn" data-pid="${p.id}" data-state="none" title="${isFa ? 'غیرفعال برای همه' : 'Disable for all'}" style="padding:3px 7px;font-size:10px;color:#f87171;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);">
-                              <span>✕ ${isFa ? 'هیچکدام' : 'None'}</span>
-                            </button>
-                            <button class="aqm-sw-btn aqm-proj-sync-btn" data-pid="${p.id}" title="${t.syncNow || 'Sync'}" style="padding:3px 8px;font-size:10.5px;">
-                              <span>🔄</span>
-                              <span>${isFa ? 'سینک' : 'Sync'}</span>
-                            </button>
-                          </div>
-                        </div>
-
-                        <!-- Quota Source Payer Selector -->
-                        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 0 4px 0;border-top:1px solid rgba(255,255,255,0.06);">
-                          <span style="font-size:10px;font-weight:700;color:#38bdf8;display:inline-flex;align-items:center;gap:3px;margin-left:2px;">
-                            <span>💳</span>
-                            <span>${isFa ? 'کسر سهمیه از:' : 'Quota Payer:'}</span>
-                          </span>
-                          <div style="display:flex;gap:4px;flex-wrap:wrap;">
-                            ${savedKeys.map(k => {
-                              const isQuotaSource = (p.quota_account && p.quota_account.toLowerCase() === k.toLowerCase()) || (!p.quota_account && k.toLowerCase() === (assigned[0] || savedKeys[0]).toLowerCase());
-                              const accShort = getCleanUserDisplayName(swState.savedAccounts[k]?.name, k);
-                              return `
-                                <button class="aqm-proj-quota-chip" data-pid="${p.id}" data-acc="${k}" data-active="${isQuotaSource}" title="${isFa ? `کسر سهمیه این پروژه از حساب ${k}` : `Deduct quota for this project from ${k}`}" style="padding:2px 8px;border-radius:9999px;font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.15s ease;display:inline-flex;align-items:center;gap:4px;background:${isQuotaSource ? 'rgba(56,189,248,0.22)' : 'rgba(255,255,255,0.04)'};color:${isQuotaSource ? '#38bdf8' : '#94a3b8'};border:1px solid ${isQuotaSource ? 'rgba(56,189,248,0.6)' : 'rgba(255,255,255,0.08)'};box-shadow:${isQuotaSource ? '0 0 8px rgba(56,189,248,0.25)' : 'none'};">
-                                  <span>${isQuotaSource ? '✓' : '○'}</span>
-                                  <span>${accShort}</span>
-                                </button>
-                              `;
-                            }).join('')}
-                          </div>
-                        </div>
-
-                        <!-- Account Assignment Chips Matrix -->
-                        <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding-top:4px;">
-                          <span style="font-size:10px;color:#64748b;margin-left:2px;">${isFa ? 'دسترسی مجاز:' : 'Access:'}</span>
-                          ${savedKeys.map(k => {
-                            const isAssigned = assigned.includes(k.toLowerCase()) || (assigned.includes('instance_1') && k === savedKeys[0]);
-                            const accShort = getCleanUserDisplayName(swState.savedAccounts[k]?.name, k);
-                            return `
-                              <button class="aqm-proj-acc-chip" data-pid="${p.id}" data-acc="${k}" data-assigned="${isAssigned}" style="padding:2px 8px;border-radius:9999px;font-size:10px;font-weight:600;cursor:pointer;transition:all 0.15s ease;display:inline-flex;align-items:center;gap:4px;background:${isAssigned ? 'rgba(16,185,129,0.18)' : 'rgba(255,255,255,0.05)'};color:${isAssigned ? '#10b981' : '#94a3b8'};border:1px solid ${isAssigned ? 'rgba(16,185,129,0.4)' : 'rgba(255,255,255,0.1)'};">
-                                <span>${isAssigned ? '✓' : '+'}</span>
-                                <span>${accShort}</span>
-                              </button>
-                            `;
-                          }).join('')}
-                        </div>
-                      </div>
-                    `;
-                  }).join('')}
-                </div>
-              `}
-            </div>
-          ` : swTab === 'tasks' ? `
-            <!-- TASKS TAB -->
-            <div style="display:flex;flex-direction:column;gap:10px;">
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 2px;">
-                <div style="font-size:11px;color:#94a3b8;line-height:1.5;">
-                  ${t.tasksDesc || (isFa ? 'مدیریت و تفکیک تسک‌های خودکار و زمان‌بندی شده برای هر حساب' : 'Manage and isolate automated tasks per account')}
-                </div>
-                <div style="display:flex;gap:6px;flex-shrink:0;">
-                  <button class="aqm-sw-btn" id="aqm-task-allow-all-btn" style="padding:3px 8px;font-size:10.5px;color:#10b981;border-color:rgba(16,185,129,0.3);background:rgba(16,185,129,0.08);" title="${isFa ? 'فعال‌سازی همه تسک‌ها برای تمام حساب‌ها' : 'Enable all tasks for all accounts'}">
-                    ✓ ${isFa ? 'همه اکانت‌ها' : 'All Accounts'}
-                  </button>
-                  <button class="aqm-sw-btn" id="aqm-task-isolate-all-btn" style="padding:3px 8px;font-size:10.5px;color:#f87171;border-color:rgba(239,68,68,0.3);background:rgba(239,68,68,0.08);" title="${isFa ? 'غیرفعال‌سازی همه تسک‌ها' : 'Disable all tasks'}">
-                    ✕ ${isFa ? 'غیرفعال‌سازی همه' : 'Disable All'}
-                  </button>
-                </div>
-              </div>
-              ${tasksList.length === 0 ? `
-                <div class="aqm-sw-card" style="text-align:center;padding:24px 14px;border-style:dashed;">
-                  <div style="font-size:11.5px;color:#94a3b8;">${t.noTasksFound}</div>
-                </div>
-              ` : `
-                <div style="display:flex;flex-direction:column;gap:7px;max-height:360px;overflow-y:auto;" class="aqm-custom-scroll">
-                  ${tasksList.map(task => {
-                    const assigned = (task.assigned_accounts || []).map(a => String(a).toLowerCase().trim());
-                    const isEn = !!task.enabled && !task.disabled_all;
-                    const isAll = !!task.enabled_all || (savedKeys.length > 0 && savedKeys.every(k => assigned.includes(k.toLowerCase())));
-                    const isNone = !!task.disabled_all || assigned.length === 0;
-                    return `
-                      <div class="aqm-sw-card" style="padding:10px 14px;display:flex;flex-direction:column;gap:8px;">
-                        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
-                          <div style="flex:1;min-width:0;">
-                            <div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;">
-                              <span style="font-size:12.5px;font-weight:700;color:#f8fafc;">${task.task_name}</span>
-                              ${isEn ? `
-                                <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);">● ${t.taskEnabled || (isFa ? 'فعال' : 'Enabled')}</span>
-                              ` : `
-                                <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(255,255,255,0.06);color:#94a3b8;">○ ${t.taskDisabled || (isFa ? 'غیرفعال' : 'Disabled')}</span>
-                              `}
-                              ${isNone ? `
-                                <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(239,68,68,0.15);color:#f87171;border:1px solid rgba(239,68,68,0.3);">${isFa ? 'متوقف برای همه' : 'All Disabled'}</span>
-                              ` : isAll ? `
-                                <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(16,185,129,0.15);color:#10b981;border:1px solid rgba(16,185,129,0.3);">${isFa ? 'فعال در همه حساب‌ها' : 'All Accounts'}</span>
-                              ` : `
-                                <span style="font-size:9px;padding:1px 6px;border-radius:9999px;background:rgba(59,130,246,0.15);color:#60a5fa;border:1px solid rgba(59,130,246,0.3);">${assigned.length} ${isFa ? 'اکانت' : 'accounts'}</span>
-                              `}
-                            </div>
-                            <div style="font-size:10.5px;color:#94a3b8;margin-bottom:2px;">
-                              ⏱ ${task.next_run || task.schedule || (isFa ? 'زمان‌بندی روزانه' : 'Daily Schedule')}
-                            </div>
-                            <div style="font-size:10px;color:#64748b;font-family:'JetBrains Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" dir="ltr" title="${task.description || task.command || ''}">
-                              ${task.description || task.command || ''}
-                            </div>
-                          </div>
-
-                          <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
-                            <button class="aqm-sw-btn aqm-task-all-btn" data-task="${task.task_name}" data-state="all" title="${isFa ? 'فعال در تمام حساب‌ها' : 'Enable for all'}" style="padding:3px 7px;font-size:10px;color:#10b981;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.25);">
-                              <span>✓ ${isFa ? 'همه' : 'All'}</span>
-                            </button>
-                            <button class="aqm-sw-btn aqm-task-all-btn" data-task="${task.task_name}" data-state="none" title="${isFa ? 'غیرفعال برای همه' : 'Disable for all'}" style="padding:3px 7px;font-size:10px;color:#f87171;background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);">
-                              <span>✕ ${isFa ? 'هیچکدام' : 'None'}</span>
-                            </button>
-                            <button class="aqm-sw-btn aqm-task-toggle-btn" data-task="${task.task_name}" data-enabled="${isEn}" title="${isEn ? (isFa ? 'توقف تسک' : 'Pause Task') : (isFa ? 'فعال‌سازی تسک' : 'Run Task')}" style="padding:3px 8px;font-size:10.5px;">
-                              <span>${isEn ? '⏸' : '▶'}</span>
-                              <span>${isEn ? (isFa ? 'توقف' : 'Pause') : (isFa ? 'فعال' : 'Enable')}</span>
-                            </button>
-                          </div>
-                        </div>
-
-                        <!-- Quota Source Payer Selector -->
-                        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 0 4px 0;border-top:1px solid rgba(255,255,255,0.06);">
-                          <span style="font-size:10px;font-weight:700;color:#38bdf8;display:inline-flex;align-items:center;gap:3px;margin-left:2px;">
-                            <span>💳</span>
-                            <span>${isFa ? 'کسر سهمیه از:' : 'Quota Payer:'}</span>
-                          </span>
-                          <div style="display:flex;gap:4px;flex-wrap:wrap;">
-                            ${savedKeys.map(k => {
-                              const isQuotaSource = (task.quota_account && task.quota_account.toLowerCase() === k.toLowerCase()) || (!task.quota_account && k.toLowerCase() === (assigned[0] || savedKeys[0]).toLowerCase());
-                              const accShort = getCleanUserDisplayName(swState.savedAccounts[k]?.name, k);
-                              return `
-                                <button class="aqm-task-quota-chip" data-task="${task.task_name}" data-acc="${k}" data-active="${isQuotaSource}" title="${isFa ? `کسر سهمیه این تسک از حساب ${k}` : `Deduct quota for this task from ${k}`}" style="padding:2px 8px;border-radius:9999px;font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.15s ease;display:inline-flex;align-items:center;gap:4px;background:${isQuotaSource ? 'rgba(56,189,248,0.22)' : 'rgba(255,255,255,0.04)'};color:${isQuotaSource ? '#38bdf8' : '#94a3b8'};border:1px solid ${isQuotaSource ? 'rgba(56,189,248,0.6)' : 'rgba(255,255,255,0.08)'};box-shadow:${isQuotaSource ? '0 0 8px rgba(56,189,248,0.25)' : 'none'};">
-                                  <span>${isQuotaSource ? '✓' : '○'}</span>
-                                  <span>${accShort}</span>
-                                </button>
-                              `;
-                            }).join('')}
-                          </div>
-                        </div>
-
-                        <!-- Account Assignment Chips Matrix -->
-                        <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap;padding-top:4px;">
-                          <span style="font-size:10px;color:#64748b;margin-left:2px;">${isFa ? 'دسترسی مجاز:' : 'Access:'}</span>
-                          ${savedKeys.map(k => {
-                            const isAssigned = assigned.includes(k.toLowerCase()) || (assigned.includes('instance_1') && k === savedKeys[0]);
-                            const accShort = getCleanUserDisplayName(swState.savedAccounts[k]?.name, k);
-                            return `
-                              <button class="aqm-task-acc-chip" data-task="${task.task_name}" data-acc="${k}" data-assigned="${isAssigned}" style="padding:2px 8px;border-radius:9999px;font-size:10px;font-weight:600;cursor:pointer;transition:all 0.15s ease;display:inline-flex;align-items:center;gap:4px;background:${isAssigned ? 'rgba(16,185,129,0.18)' : 'rgba(255,255,255,0.05)'};color:${isAssigned ? '#10b981' : '#94a3b8'};border:1px solid ${isAssigned ? 'rgba(16,185,129,0.4)' : 'rgba(255,255,255,0.1)'};">
-                                <span>${isAssigned ? '✓' : '+'}</span>
-                                <span>${accShort}</span>
-                              </button>
-                            `;
-                          }).join('')}
-                        </div>
-                      </div>
-                    `;
-                  }).join('')}
-                </div>
-              `}
-            </div>
           ` : ''}
 
         </div>
@@ -3732,10 +3500,6 @@
 
     const tabAcc = modal.querySelector('#aqm-tab-btn-accounts');
     if (tabAcc) tabAcc.onclick = () => { swTab = 'accounts'; renderSwitcherModal(); };
-    const tabProj = modal.querySelector('#aqm-tab-btn-projects');
-    if (tabProj) tabProj.onclick = () => { swTab = 'projects'; renderSwitcherModal(); };
-    const tabTasks = modal.querySelector('#aqm-tab-btn-tasks');
-    if (tabTasks) tabTasks.onclick = () => { swTab = 'tasks'; renderSwitcherModal(); };
 
 
     // Accounts tab actions

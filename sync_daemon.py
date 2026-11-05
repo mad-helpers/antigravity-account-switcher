@@ -268,13 +268,8 @@ def get_instance_active_account(instance_id="instance_1"):
         except Exception:
             pass
 
-    # Check manifest for explicit instance_id assignment first
-    for email, data in saved_manifest.items():
-        if isinstance(data, dict) and data.get("instance_id") == instance_id:
-            return email
-
     if instance_id != "instance_1":
-        # Check active_<instance_id>.txt
+        # 1. Primary Source for Secondary Instances: Check active_<instance_id>.txt
         f_inst = home / ".gemini" / "accounts" / f"active_{instance_id}.txt"
         if f_inst.exists():
             try:
@@ -284,20 +279,26 @@ def get_instance_active_account(instance_id="instance_1"):
             except Exception:
                 pass
 
-        # Check instance app_storage.json
+        # 2. Check instance app_storage.json for account email or agy username
         num = "".join(filter(str.isdigit, instance_id))
         dir_name = f"Antigravity-Instance{num}" if num else f"Antigravity-{instance_id}"
         st_file = appdata / dir_name / "app_storage.json"
         if st_file.exists():
             try:
                 with open(st_file, "r", encoding="utf-8") as f:
-                    acc = json.load(f).get("antigravity:account_email")
+                    s_data = json.load(f)
+                    acc = s_data.get("antigravity:account_email") or s_data.get("agy.onboarding.lastLoginUsername") or s_data.get("jetski.onboarding.lastLoginUsername")
                     if acc and (not saved_manifest or acc in saved_manifest):
                         return acc
             except Exception:
                 pass
 
-        # Match by order from manifest keys if not assigned
+        # 3. Check manifest for explicit instance_id assignment
+        for email, data in saved_manifest.items():
+            if isinstance(data, dict) and data.get("instance_id") == instance_id:
+                return email
+
+        # 4. Match by order from manifest keys if not assigned
         if num and num.isdigit():
             idx = int(num) - 1  # instance_2 -> index 1, instance_3 -> index 2
             m_keys = list(saved_manifest.keys())
