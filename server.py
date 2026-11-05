@@ -482,7 +482,7 @@ def is_dual_launching():
     return _dual_launch_in_progress
 
 def is_instance_running(inst_dir_or_name):
-    """Check if an Antigravity instance with a given user-data-dir is currently running."""
+    """Check if an Antigravity root process with a given user-data-dir is currently running."""
     if not inst_dir_or_name:
         return False
     needle = inst_dir_or_name.name.lower() if hasattr(inst_dir_or_name, "name") else str(inst_dir_or_name).lower()
@@ -493,6 +493,9 @@ def is_instance_running(inst_dir_or_name):
             name = (p.info.get('name') or '').lower()
             if 'antigravity' in name:
                 cmd = p.info.get('cmdline') or []
+                # Exclude child processes like gpu-process, utility, crashpad
+                if any(arg.startswith('--type=') for arg in cmd):
+                    continue
                 if any(needle in arg.lower() or needle_alt in arg.lower() for arg in cmd):
                     return True
     except Exception:
@@ -556,27 +559,32 @@ def focus_instance(inst_dir):
 
             if inst_pids:
                 user32 = ctypes.windll.user32
-                h_desk = user32.OpenDesktopW('Default', 0, False, 0x01FF)
-                if h_desk:
-                    user32.SetThreadDesktop(h_desk)
-
                 WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+                matched_hwnds = []
+
                 def enum_cb(hwnd, lparam):
                     pid = wintypes.DWORD()
                     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
                     if pid.value in inst_pids:
-                        length = user32.GetWindowTextLengthW(hwnd)
-                        if length > 0:
-                            SW_RESTORE = 9
-                            user32.ShowWindow(hwnd, SW_RESTORE)
-                            user32.BringWindowToTop(hwnd)
-                            user32.keybd_event(0x12, 0, 0, 0)
-                            user32.SetForegroundWindow(hwnd)
-                            user32.keybd_event(0x12, 0, 2, 0)
+                        buf = ctypes.create_unicode_buffer(256)
+                        user32.GetClassNameW(hwnd, buf, 256)
+                        cls = buf.value
+                        if cls == 'Chrome_WidgetWin_1' or user32.GetWindowTextLengthW(hwnd) > 0:
+                            matched_hwnds.append(hwnd)
                     return True
 
-                user32.EnumDesktopWindows(h_desk, WNDENUMPROC(enum_cb), 0)
-                focused = True
+                user32.EnumWindows(WNDENUMPROC(enum_cb), 0)
+
+                for hwnd in matched_hwnds:
+                    SW_SHOWNORMAL = 1
+                    SW_RESTORE = 9
+                    user32.ShowWindow(hwnd, SW_SHOWNORMAL)
+                    user32.ShowWindow(hwnd, SW_RESTORE)
+                    user32.BringWindowToTop(hwnd)
+                    user32.keybd_event(0x12, 0, 0, 0)
+                    user32.SetForegroundWindow(hwnd)
+                    user32.keybd_event(0x12, 0, 2, 0)
+                    focused = True
         except Exception:
             pass
     elif sys_name == 'macos':
@@ -793,15 +801,28 @@ def launch_dual_instance(account_key, project_path=None):
 
         # If this instance is already running, focus and bring to front directly!
         if is_instance_running(target_inst_dir):
-            focus_instance(target_inst_dir)
-            return {
-                'success': True,
-                'account': account_key,
-                'instance_id': inst_id,
-                'user_data_dir': str(target_inst_dir),
-                'project_path': project_path or '',
-                'msg': f'پنجره حساب {account_key} فعال شد'
-            }
+            if focus_instance(target_inst_dir):
+                return {
+                    'success': True,
+                    'account': account_key,
+                    'instance_id': inst_id,
+                    'user_data_dir': str(target_inst_dir),
+                    'project_path': project_path or '',
+                    'msg': f'پنجره حساب {account_key} فعال شد'
+                }
+            else:
+                # Ghost/zombie process! Terminate dead instance processes and proceed to fresh launch
+                try:
+                    import psutil
+                    needle = target_inst_dir.name.lower()
+                    for p in psutil.process_iter(['pid', 'name', 'cmdline']):
+                        if 'antigravity' in (p.info.get('name') or '').lower():
+                            cmd = p.info.get('cmdline') or []
+                            if any(needle in arg.lower() for arg in cmd):
+                                p.kill()
+                    time.sleep(0.5)
+                except Exception:
+                    pass
 
         # Deterministic primary token resolution: Prioritize live keychain token
         primary_token = quota_engine.get_keychain_token()
@@ -823,8 +844,8 @@ def launch_dual_instance(account_key, project_path=None):
         if sys_name == 'windows':
             target_inst_dir.mkdir(parents=True, exist_ok=True)
             
-            # Clean stale locks and ports
-            for f_name in ["DevToolsActivePort", "lockfile"]:
+            # Clean stale locks, cookies and ports
+            for f_name in ["DevToolsActivePort", "lockfile", "SingletonLock", "SingletonCookie", "SingletonSocket"]:
                 f_p = target_inst_dir / f_name
                 if f_p.exists():
                     try:
@@ -911,13 +932,17 @@ def launch_dual_instance(account_key, project_path=None):
             proc_env['CLOUDCODE_AUTH_TOKEN'] = target_token
 
             # Launch secondary instance with isolated user-data-dir and designated project
-            DETACHED_PROCESS = 0x00000008
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = 1  # SW_SHOWNORMAL
+            si.lpDesktop = r"WinSta0\Default"
+
             CREATE_NEW_PROCESS_GROUP = 0x00000200
             CREATE_BREAKAWAY_FROM_JOB = 0x01000000
-            cmd = [exe, f'--user-data-dir={str(target_inst_dir)}', '--new-window']
+            cmd = [exe, f'--user-data-dir={str(target_inst_dir)}']
             if project_path and os.path.exists(project_path):
                 cmd.append(project_path)
-            flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+            flags = CREATE_NEW_PROCESS_GROUP
             existing_ls_pids = set()
             try:
                 import psutil
@@ -928,9 +953,9 @@ def launch_dual_instance(account_key, project_path=None):
                 pass
 
             try:
-                proc = subprocess.Popen(cmd, env=proc_env, creationflags=flags | CREATE_BREAKAWAY_FROM_JOB)
+                proc = subprocess.Popen(cmd, env=proc_env, startupinfo=si, creationflags=flags | CREATE_BREAKAWAY_FROM_JOB)
             except Exception:
-                proc = subprocess.Popen(cmd, env=proc_env, creationflags=flags)
+                proc = subprocess.Popen(cmd, env=proc_env, startupinfo=si, creationflags=flags)
             
             # Restore primary token and bring window to front
             def _post_launch_worker(launch_pid, target_acc, orig_pids, target_dir_path):
