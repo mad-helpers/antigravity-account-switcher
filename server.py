@@ -855,6 +855,10 @@ def launch_dual_instance(account_key, project_path=None):
                     s_data["new-convo-last-selected-project"] = designated_pid
                 s_data["antigravity:instance_id"] = inst_id
                 s_data["antigravity:account_email"] = account_key
+                s_data["agy.onboarding.lastLoginUsername"] = account_key
+                s_data["jetski.onboarding.lastLoginUsername"] = account_key
+                s_data["agy.onboarding.lastLoginIsGcpTos"] = "false"
+                s_data["jetski.onboarding.lastLoginIsGcpTos"] = "false"
                 if project_path:
                     s_data["antigravity:designated_project"] = project_path
                 # Prime quota in app_storage so the new instance immediately displays secondary account info
@@ -863,6 +867,14 @@ def launch_dual_instance(account_key, project_path=None):
                     s_data["antigravity:active_quota"] = json.dumps(sec_quota)
                 with open(storage_p, 'w', encoding='utf-8') as sf:
                     json.dump(s_data, sf, indent=2)
+            except Exception:
+                pass
+
+            # Save active_<instance_id>.txt for deterministic multi-instance account mapping
+            try:
+                active_f = Path.home() / ".gemini" / "accounts" / f"active_{inst_id}.txt"
+                active_f.parent.mkdir(parents=True, exist_ok=True)
+                active_f.write_text(account_key, encoding="utf-8")
             except Exception:
                 pass
 
@@ -889,11 +901,20 @@ def launch_dual_instance(account_key, project_path=None):
             # Prime target token in credential manager for instance startup
             write_token_to_credential_manager(target_token)
             
+            # Prepare process environment variables with explicit target token
+            proc_env = os.environ.copy()
+            proc_env['ANTIGRAVITY_TOKEN'] = target_token
+            proc_env['ANTIGRAVITY_ACCOUNT'] = account_key
+            proc_env['ANTIGRAVITY_INSTANCE_ID'] = inst_id
+            proc_env['GEMINI_CLI_AUTH_TOKEN'] = target_token
+            proc_env['GOOGLE_OAUTH_TOKEN'] = target_token
+            proc_env['CLOUDCODE_AUTH_TOKEN'] = target_token
+
             # Launch secondary instance with isolated user-data-dir and designated project
             DETACHED_PROCESS = 0x00000008
             CREATE_NEW_PROCESS_GROUP = 0x00000200
             CREATE_BREAKAWAY_FROM_JOB = 0x01000000
-            cmd = [exe, f'--user-data-dir={str(target_inst_dir)}']
+            cmd = [exe, f'--user-data-dir={str(target_inst_dir)}', '--new-window']
             if project_path and os.path.exists(project_path):
                 cmd.append(project_path)
             flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
@@ -907,35 +928,53 @@ def launch_dual_instance(account_key, project_path=None):
                 pass
 
             try:
-                proc = subprocess.Popen(cmd, creationflags=flags | CREATE_BREAKAWAY_FROM_JOB)
+                proc = subprocess.Popen(cmd, env=proc_env, creationflags=flags | CREATE_BREAKAWAY_FROM_JOB)
             except Exception:
-                proc = subprocess.Popen(cmd, creationflags=flags)
+                proc = subprocess.Popen(cmd, env=proc_env, creationflags=flags)
             
             # Restore primary token and bring window to front
             def _post_launch_worker(launch_pid, target_acc, orig_pids, target_dir_path):
                 global _dual_launch_in_progress
                 start_t = time.time()
-                found_ls = False
-                try:
-                    import psutil
-                    # Wait up to 30s for the newly spawned language_server.exe to boot
-                    for _ in range(60):
-                        time.sleep(0.5)
-                        for p in psutil.process_iter(['pid', 'name', 'create_time']):
-                            p_name = (p.info.get('name') or '').lower()
-                            if 'language_server' in p_name:
-                                if (p.info['pid'] not in orig_pids) or (p.info.get('create_time', 0) >= (start_t - 2.0)):
-                                    found_ls = True
-                                    break
-                        if found_ls:
-                            # Language server process is alive! Give it 5.0 seconds to read and cache credentials
-                            time.sleep(5.0)
-                            break
-                except Exception as e:
-                    print(f"[MULTI-INSTANCE] Error detecting language_server: {e}", flush=True)
+                port_ready = False
+                target_port_file = Path(target_dir_path) / "DevToolsActivePort"
+                
+                # Wait up to 45s for DevToolsActivePort to be written and listening
+                for _ in range(90):
+                    time.sleep(0.5)
+                    if target_port_file.exists():
+                        try:
+                            with open(target_port_file, 'r', encoding='utf-8') as pf:
+                                port_lines = pf.read().strip().split('\n')
+                                if port_lines and port_lines[0].isdigit():
+                                    p_num = int(port_lines[0])
+                                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                                        s.settimeout(0.5)
+                                        if s.connect_ex(('127.0.0.1', p_num)) == 0:
+                                            port_ready = True
+                                            break
+                        except Exception:
+                            pass
 
-                if not found_ls:
-                    time.sleep(10.0)
+                # If port is ready, wait for language_server to spawn or up to 12s, plus 4s stabilization
+                if port_ready:
+                    ls_found = False
+                    try:
+                        import psutil
+                        for _ in range(24):
+                            time.sleep(0.5)
+                            for p in psutil.process_iter(['pid', 'name']):
+                                p_name = (p.info.get('name') or '').lower()
+                                if 'language_server' in p_name and p.info['pid'] not in orig_pids:
+                                    ls_found = True
+                                    break
+                            if ls_found:
+                                break
+                    except Exception:
+                        pass
+                    time.sleep(4.0)
+                else:
+                    time.sleep(15.0)
 
                 try:
                     # Now restore primary token back for Instance 1
