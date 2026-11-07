@@ -1,6 +1,6 @@
 ﻿# ==============================================================================
 # Antigravity Account Switcher & Migration Suite - Windows Installer
-# Author: Ethan Carter (https://github.com/Bombhub-apk/antigravity-account-switcher)
+# Organization: mad-helpers (https://github.com/mad-helpers/antigravity-account-switcher)
 # ==============================================================================
 
 $ErrorActionPreference = "Stop"
@@ -11,8 +11,8 @@ $Desktop = [System.Environment]::GetFolderPath('Desktop')
 $StartMenu = [System.Environment]::GetFolderPath('Programs')
 
 Write-Host "`n🚀 Installing Antigravity Account Switcher & Migration Suite..." -ForegroundColor Cyan
-Write-Host "👨‍💻 Developed by: Ethan Carter" -ForegroundColor Yellow
-Write-Host "🌐 GitHub: https://github.com/Bombhub-apk/antigravity-account-switcher`n" -ForegroundColor Gray
+Write-Host "👨‍💻 Developed by: mad-helpers (Madgod-xyz & Bombhub-apk)" -ForegroundColor Yellow
+Write-Host "🌐 GitHub: https://github.com/mad-helpers/antigravity-account-switcher`n" -ForegroundColor Gray
 
 # 1. Locate Antigravity Icon
 $iconPath = "$env:LOCALAPPDATA\Programs\Antigravity\Antigravity.exe"

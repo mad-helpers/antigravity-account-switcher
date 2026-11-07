@@ -3,7 +3,7 @@ set -e
 
 ARCH="$(uname -m)"
 echo "🚀 Installing Antigravity Account Switcher & Migration Suite..."
-echo "👨‍💻 Developed by: Ethan Carter (https://github.com/Bombhub-apk)"
+echo "👨‍💻 Developed by: mad-helpers (https://github.com/mad-helpers)"
 if [ "$ARCH" = "arm64" ]; then
     echo "🍏 Detected Architecture: Apple Silicon (M1/M2/M3/M4 - arm64)"
 else
