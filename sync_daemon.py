@@ -372,28 +372,101 @@ def is_port_open(port, host="127.0.0.1", timeout=0.5):
     except Exception:
         return False
 
+def is_valid_cdp_port(port, timeout=0.45):
+    if not port or not is_port_open(port, timeout=timeout):
+        return False
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{int(port)}/json/list")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="ignore"))
+            return isinstance(data, list)
+    except Exception:
+        return False
+
+def discover_live_cdp_ports():
+    """Scan running Antigravity.exe root processes via psutil to find live CDP ports when DevToolsActivePort is stale."""
+    found = {}
+    try:
+        import psutil
+        for p in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                name = (p.info.get('name') or '').lower()
+                if 'antigravity' not in name:
+                    continue
+                cmd = p.info.get('cmdline') or []
+                if any(str(a).startswith(('--type=', '--import')) for a in cmd):
+                    continue
+                inst_id = "instance_1"
+                for arg in cmd:
+                    low = str(arg).lower()
+                    if 'antigravity-instance' in low:
+                        after = low.split('antigravity-instance', 1)[1]
+                        num = "".join(filter(str.isdigit, after.split('\\')[0].split('/')[0].split('"')[0]))
+                        if num:
+                            inst_id = f"instance_{num}"
+                        break
+                for conn in p.net_connections(kind='tcp'):
+                    if conn.status == 'LISTEN' and conn.laddr and conn.laddr.ip == '127.0.0.1':
+                        cand_port = conn.laddr.port
+                        if cand_port != 39281 and is_valid_cdp_port(cand_port, timeout=0.35):
+                            found[inst_id] = cand_port
+                            break
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return found
+
+def _heal_devtools_port_file(port_file_path, live_port):
+    try:
+        ws_path = "/devtools/browser"
+        try:
+            req = urllib.request.Request(f"http://127.0.0.1:{int(live_port)}/json/version")
+            with urllib.request.urlopen(req, timeout=0.4) as resp:
+                vdata = json.loads(resp.read().decode("utf-8", errors="ignore"))
+                ws_url = vdata.get("webSocketDebuggerUrl", "")
+                if "/devtools/" in ws_url:
+                    ws_path = "/devtools/" + ws_url.split("/devtools/", 1)[1]
+        except Exception:
+            pass
+        port_file_path.parent.mkdir(parents=True, exist_ok=True)
+        port_file_path.write_text(f"{int(live_port)}\n{ws_path}\n", encoding="utf-8")
+    except Exception:
+        pass
+
 def get_devtools_targets():
     home = Path.home()
     appdata = Path(os.getenv("APPDATA", str(home / "AppData" / "Roaming")))
     targets = []
     seen_ports = set()
+    discovered_map = None
 
     # 1. Primary instance (Instance 1)
+    primary_port = None
     if DEVTOOLS_PORT_PATH.exists():
         try:
             with open(DEVTOOLS_PORT_PATH, "r", encoding="utf-8") as f:
                 lines = f.read().strip().split("\n")
-                if lines:
-                    val = int(lines[0])
-                    if is_port_open(val) and val not in seen_ports:
-                        seen_ports.add(val)
-                        targets.append({
-                            "instance_id": "instance_1",
-                            "port": val,
-                            "default_account": get_instance_active_account("instance_1")
-                        })
+                if lines and lines[0].strip().isdigit():
+                    val = int(lines[0].strip())
+                    if is_valid_cdp_port(val):
+                        primary_port = val
         except Exception:
             pass
+
+    if not primary_port:
+        discovered_map = discover_live_cdp_ports()
+        if "instance_1" in discovered_map:
+            primary_port = discovered_map["instance_1"]
+            _heal_devtools_port_file(DEVTOOLS_PORT_PATH, primary_port)
+
+    if primary_port and primary_port not in seen_ports:
+        seen_ports.add(primary_port)
+        targets.append({
+            "instance_id": "instance_1",
+            "port": primary_port,
+            "default_account": get_instance_active_account("instance_1")
+        })
 
     # 2. Dynamic discovery for all secondary instances (Antigravity-Instance2, Instance3, etc.)
     try:
@@ -404,21 +477,30 @@ def get_devtools_targets():
             num = "".join(filter(str.isdigit, dir_name))
             inst_id = f"instance_{num}" if num else dir_name.lower().replace("-", "_")
             port_file = p / "DevToolsActivePort"
+            sec_port = None
             if port_file.exists():
                 try:
                     with open(port_file, "r", encoding="utf-8") as f:
                         lines = f.read().strip().split("\n")
-                        if lines:
-                            val = int(lines[0])
-                            if is_port_open(val) and val not in seen_ports:
-                                seen_ports.add(val)
-                                targets.append({
-                                    "instance_id": inst_id,
-                                    "port": val,
-                                    "default_account": get_instance_active_account(inst_id)
-                                })
+                        if lines and lines[0].strip().isdigit():
+                            val = int(lines[0].strip())
+                            if is_valid_cdp_port(val):
+                                sec_port = val
                 except Exception:
                     pass
+            if not sec_port:
+                if discovered_map is None:
+                    discovered_map = discover_live_cdp_ports()
+                if inst_id in discovered_map:
+                    sec_port = discovered_map[inst_id]
+                    _heal_devtools_port_file(port_file, sec_port)
+            if sec_port and sec_port not in seen_ports:
+                seen_ports.add(sec_port)
+                targets.append({
+                    "instance_id": inst_id,
+                    "port": sec_port,
+                    "default_account": get_instance_active_account(inst_id)
+                })
     except Exception:
         pass
 
@@ -831,9 +913,9 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
 
                     resp_data['activeAccount'] = get_account_profile_data(target_acc, manifest)
                     resp_data['instanceId'] = req_inst or 'instance_1'
-                    resp_data['conversations'] = m_eng.list_conversations() if hasattr(m_eng, 'list_conversations') else []
-                    resp_data['projects'] = m_eng.list_projects() if hasattr(m_eng, 'list_projects') else []
-                    resp_data['tasks'] = m_eng.list_scheduled_tasks(account=target_acc) if hasattr(m_eng, 'list_scheduled_tasks') else []
+                    resp_data['conversations'] = []
+                    resp_data['projects'] = []
+                    resp_data['tasks'] = []
                     resp_data['allowedConversations'] = {
                         'instance_1': m_eng.get_allowed_conversations('instance_1') if hasattr(m_eng, 'get_allowed_conversations') else [],
                         'instance_2': m_eng.get_allowed_conversations('instance_2') if hasattr(m_eng, 'get_allowed_conversations') else []
@@ -962,6 +1044,9 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
                         threading.Thread(target=do_restart, daemon=True).start()
                 else:
                     _cached_account_info = None
+            elif self.path in ('/api/restart', '/api/restart_app'):
+                threading.Thread(target=lambda: _restart_switched_account(srv_mod), daemon=True).start()
+                resp = {'success': True, 'msg': 'Restarting Antigravity...'}
             elif self.path == '/api/save':
                 resp = srv_mod.save_current_account()
                 _cached_account_info = None
@@ -1142,9 +1227,9 @@ async def cdp_broadcast_state(ws, extra_toast=None, instance_id="instance_1", ac
         actual_account = target_account
         active_acc = get_account_profile_data(target_account, manifest)
 
-        conversations = m_eng.list_conversations() if hasattr(m_eng, 'list_conversations') else []
-        projects = m_eng.list_projects() if hasattr(m_eng, 'list_projects') else []
-        tasks = m_eng.list_scheduled_tasks(account=actual_account) if hasattr(m_eng, 'list_scheduled_tasks') else []
+        conversations = []
+        projects = []
+        tasks = []
         allowed_convs = m_eng.get_allowed_conversations(actual_account) if hasattr(m_eng, 'get_allowed_conversations') else []
 
         running_accounts = {}
@@ -1240,23 +1325,32 @@ async def cdp_handle_action(ws, action, data, instance_id="instance_1", default_
                 "msg": "اکانت فعلی با موفقیت ذخیره شد" if res.get("success") else (res.get("error") or "خطا در ذخیره اکانت"),
                 "isErr": not res.get("success")
             })
+        elif action == "restart_app":
+            log(f"[CDP RESTART APP] Explicit restart requested from {instance_id}")
+            broadcast_all_instances({
+                "msg": "در حال راه‌اندازی مجدد برنامه Antigravity... / Restarting Antigravity...",
+                "isErr": False
+            })
+            threading.Thread(target=lambda: _restart_switched_account(srv), daemon=True).start()
         elif action == "switch":
             acc_key = data.get("accountKey")
             no_restart = data.get("noRestart", True)
-            log(f"[CDP SWITCH] Target: {acc_key}")
+            log(f"[CDP SWITCH] Target: {acc_key} (no_restart={no_restart})")
             res = srv.switch_account(acc_key, no_restart=True)
             if res.get("success"):
                 res["restart"] = {"requested": not bool(no_restart), "launched": False, "completed": False,
                                   "status": "pending" if not no_restart else "not_requested"}
                 quota_d = res.get("quota")
-                global _cached_account_info, _cached_account_time
+                global _cached_account_info, _cached_account_time, _cached_usage
                 _cached_account_info = quota_d
                 _cached_account_time = time.time()
+                if quota_d:
+                    _cached_usage = quota_d
                 with _cdp_conns_lock:
                     if instance_id in _active_cdp_connections:
                         _active_cdp_connections[instance_id]["account"] = acc_key
                 broadcast_all_instances({
-                    "msg": f"حساب به {acc_key} تغییر یافت.",
+                    "msg": f"حساب به {acc_key} تغییر یافت." + (" در حال ری‌استارت..." if not no_restart else ""),
                     "isErr": False, "restart": res["restart"]
                 }, target_account=acc_key)
                 if not no_restart:
@@ -1434,53 +1528,93 @@ async def cdp_instance_worker(instance_id, port, default_account):
     loop = asyncio.get_running_loop()
     import server as srv
     log(f"[CDP] Starting worker for {instance_id} on port {port}")
+    health_task = None
     try:
         req = urllib.request.Request(f"http://127.0.0.1:{port}/json/list")
         with urllib.request.urlopen(req, timeout=2) as resp:
             targets = json.loads(resp.read().decode())
 
-        page = next((t for t in targets if t.get("type") == "page" and not t.get("url", "").startswith("data:") and "about:blank" not in t.get("url", "")), None)
-        if not page:
-            page = next((t for t in targets if t.get("type") == "page" and "about:blank" not in t.get("url", "")), None)
-        if not page:
-            page = next((t for t in targets if t.get("type") == "page"), None)
+        wb_pages = [
+            t for t in targets
+            if t.get("type") == "page"
+            and not (t.get("url") or "").startswith(("data:", "about:", "devtools:", "chrome-extension:"))
+            and t.get("webSocketDebuggerUrl")
+        ]
+        page = next((t for t in wb_pages if "/c/" in (t.get("url") or "") or "workbench" in (t.get("url") or "").lower()), None)
+        if not page and wb_pages:
+            page = wb_pages[0]
         if not page or not page.get("webSocketDebuggerUrl"):
             return
 
+        page_id = page.get("id")
         ws_url = page["webSocketDebuggerUrl"]
-        log(f"[CDP] [{instance_id}] Connecting to {ws_url}")
+        log(f"[CDP] [{instance_id}] Connecting to workbench {ws_url} (url={page.get('url', '')[:60]})")
 
-        async with websockets.connect(ws_url, ping_interval=None, ping_timeout=None) as ws:
+        async with websockets.connect(ws_url, ping_interval=10, ping_timeout=5) as ws:
             with _cdp_conns_lock:
                 _active_cdp_connections[instance_id] = {
                     "ws": ws,
                     "port": port,
                     "account": default_account,
                     "loop": loop,
-                    "instance_id": instance_id
+                    "instance_id": instance_id,
+                    "page_id": page_id
                 }
 
-            await ws.send(json.dumps({"id": 1, "method": "Runtime.enable"}))
-            await ws.send(json.dumps({"id": 2, "method": "Page.enable"}))
-            await ws.send(json.dumps({"id": 3, "method": "DOMStorage.enable"}))
-            await ws.send(json.dumps({"id": 4, "method": "Runtime.addBinding", "params": {"name": "__aqm_daemon_ipc"}}))
+            async def inject_full_bundle(reason="init"):
+                await ws.send(json.dumps({"id": 1, "method": "Runtime.enable"}))
+                await ws.send(json.dumps({"id": 2, "method": "Page.enable"}))
+                await ws.send(json.dumps({"id": 3, "method": "DOMStorage.enable"}))
+                await ws.send(json.dumps({"id": 4, "method": "Runtime.addBinding", "params": {"name": "__aqm_daemon_ipc"}}))
+                cur_acc = _active_cdp_connections.get(instance_id, {}).get("account") or default_account
+                init_script = get_injector_script(_cached_usage, instance_id=instance_id, account_email=cur_acc)
+                if init_script:
+                    await ws.send(json.dumps({
+                        "id": 5,
+                        "method": "Page.addScriptToEvaluateOnNewDocument",
+                        "params": {"source": init_script}
+                    }))
+                    await ws.send(json.dumps({
+                        "id": 6,
+                        "method": "Runtime.evaluate",
+                        "params": {"expression": init_script}
+                    }))
+                await cdp_broadcast_state(ws, instance_id=instance_id, account_email=cur_acc)
+                log(f"[CDP] [{instance_id}] Injected plugin bundle ({reason}).")
 
-            init_script = get_injector_script(_cached_usage, instance_id=instance_id, account_email=default_account)
-            if init_script:
-                await ws.send(json.dumps({
-                    "id": 5,
-                    "method": "Page.addScriptToEvaluateOnNewDocument",
-                    "params": {"source": init_script}
-                }))
-                await ws.send(json.dumps({
-                    "id": 6,
-                    "method": "Runtime.evaluate",
-                    "params": {"expression": init_script}
-                }))
+            await inject_full_bundle("connect")
 
-            log(f"[CDP] [{instance_id}] __aqm_daemon_ipc bound and scripts injected.")
+            async def _dom_health_watchdog():
+                while True:
+                    await asyncio.sleep(3.5)
+                    try:
+                        # Verify workbench target still exists and hasn't been replaced by a new window
+                        req_check = urllib.request.Request(f"http://127.0.0.1:{port}/json/list")
+                        with urllib.request.urlopen(req_check, timeout=1.5) as r_check:
+                            cur_targets = json.loads(r_check.read().decode())
+                        cur_wb = [
+                            t for t in cur_targets
+                            if t.get("type") == "page"
+                            and not (t.get("url") or "").startswith(("data:", "about:", "devtools:", "chrome-extension:"))
+                            and t.get("webSocketDebuggerUrl")
+                        ]
+                        if cur_wb and page_id and not any(t.get("id") == page_id for t in cur_wb):
+                            log(f"[CDP] [{instance_id}] Workbench page replaced; reconnecting to new target.")
+                            await ws.close()
+                            return
 
-            await cdp_broadcast_state(ws, instance_id=instance_id, account_email=default_account)
+                        await ws.send(json.dumps({
+                            "id": 777001,
+                            "method": "Runtime.evaluate",
+                            "params": {
+                                "expression": "Boolean(typeof window.__renderAntigravityBadge === 'function' && (document.getElementById('antigravity-account-pill') || document.getElementById('antigravity-usage-badge')))",
+                                "returnByValue": True
+                            }
+                        }))
+                    except Exception:
+                        return
+
+            health_task = asyncio.create_task(_dom_health_watchdog())
 
             if instance_id == "instance_1" and not getattr(srv, 'is_dual_launching', lambda: False)():
                 token = quota_engine.get_keychain_token()
@@ -1496,13 +1630,21 @@ async def cdp_instance_worker(instance_id, port, default_account):
             async for msg in ws:
                 try:
                     d = json.loads(msg)
+                    if d.get("id") == 777001:
+                        alive_ok = d.get("result", {}).get("result", {}).get("value", True)
+                        if not alive_ok:
+                            log(f"[CDP WATCHDOG] [{instance_id}] Plugin missing in DOM — auto-healing now!")
+                            await inject_full_bundle("watchdog-heal")
+                        continue
+
                     method = d.get("method")
                     if method == "Runtime.bindingCalled" and d.get("params", {}).get("name") == "__aqm_daemon_ipc":
                         payload_raw = d.get("params", {}).get("payload", "{}")
                         payload = json.loads(payload_raw)
                         action = payload.get("action")
                         if action:
-                            await cdp_handle_action(ws, action, payload, instance_id=instance_id, default_account=default_account)
+                            cur_acc = _active_cdp_connections.get(instance_id, {}).get("account") or default_account
+                            await cdp_handle_action(ws, action, payload, instance_id=instance_id, default_account=cur_acc)
 
                     elif method in ("DOMStorage.domStorageItemAdded", "DOMStorage.domStorageItemUpdated"):
                         params = d.get("params", {})
@@ -1511,50 +1653,60 @@ async def cdp_instance_worker(instance_id, port, default_account):
                                 val = json.loads(params.get("newValue", "{}"))
                                 action = val.get("action")
                                 if action:
-                                    await cdp_handle_action(ws, action, val, instance_id=instance_id, default_account=default_account)
+                                    cur_acc = _active_cdp_connections.get(instance_id, {}).get("account") or default_account
+                                    await cdp_handle_action(ws, action, val, instance_id=instance_id, default_account=cur_acc)
                             except Exception:
                                 pass
 
-                    elif method in ("Page.loadEventFired", "Page.frameNavigated"):
-                        await ws.send(json.dumps({"id": 100, "method": "Runtime.addBinding", "params": {"name": "__aqm_daemon_ipc"}}))
-                        nav_script = get_injector_script(_cached_usage, instance_id=instance_id, account_email=default_account)
-                        if nav_script:
-                            await ws.send(json.dumps({
-                                "id": 101,
-                                "method": "Runtime.evaluate",
-                                "params": {"expression": nav_script}
-                            }))
-                        await cdp_broadcast_state(ws, instance_id=instance_id, account_email=default_account)
+                    elif method in ("Page.loadEventFired", "Page.frameNavigated", "Runtime.executionContextsCleared"):
+                        await inject_full_bundle(method)
                 except Exception as e:
                     log(f"[CDP MSG ERROR] [{instance_id}] {e}")
 
     except Exception as e:
         log(f"[CDP WORKER ERROR] [{instance_id}] {e}")
     finally:
+        if health_task:
+            try:
+                health_task.cancel()
+            except Exception:
+                pass
         with _cdp_conns_lock:
             _active_cdp_connections.pop(instance_id, None)
         log(f"[CDP WORKER CLOSED] [{instance_id}]")
 
 async def cdp_supervisor_loop():
     running_tasks = {}
+    running_ports = {}
     while True:
         try:
             targets = get_devtools_targets()
             for inst_id, task in list(running_tasks.items()):
                 if task.done():
                     running_tasks.pop(inst_id, None)
+                    running_ports.pop(inst_id, None)
 
             for tgt in targets:
                 inst_id = tgt["instance_id"]
+                new_port = tgt["port"]
+                if inst_id in running_tasks and running_ports.get(inst_id) != new_port:
+                    log(f"[CDP SUPERVISOR] Port changed for {inst_id}: {running_ports.get(inst_id)} -> {new_port}")
+                    try:
+                        running_tasks[inst_id].cancel()
+                    except Exception:
+                        pass
+                    running_tasks.pop(inst_id, None)
+
                 if inst_id not in running_tasks or running_tasks[inst_id].done():
                     task = asyncio.create_task(
-                        cdp_instance_worker(inst_id, tgt["port"], tgt["default_account"])
+                        cdp_instance_worker(inst_id, new_port, tgt["default_account"])
                     )
                     running_tasks[inst_id] = task
+                    running_ports[inst_id] = new_port
         except Exception as e:
             log(f"[CDP SUPERVISOR ERROR] {e}")
 
-        await asyncio.sleep(2)
+        await asyncio.sleep(1.5)
 
 def start_cdp_supervisor():
     loop = asyncio.new_event_loop()

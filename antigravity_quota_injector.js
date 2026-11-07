@@ -1510,6 +1510,10 @@
       if (p !== null) isPrivacyMode = (p !== 'false');
     } catch (e) {}
 
+    const isFa = (typeof swLang !== 'undefined' ? swLang : (localStorage.getItem('antigravity:switcher_lang') || 'fa')) !== 'en';
+    const uiDir = isFa ? 'rtl' : 'ltr';
+    const uiFont = isFa ? fontFa : fontEn;
+
     const isRem = (displayMode === 'remaining');
     const sessRem = Math.round(currentUsage.session?.remaining_pct ?? (100 - Math.round(currentUsage.session?.used_pct ?? 0)));
     const sessUsed = Math.round(currentUsage.session?.used_pct ?? (100 - sessRem));
@@ -1523,8 +1527,8 @@
 
     const mainPct = isRem ? sessRem : sessUsed;
     const subPct = isRem ? sessUsed : sessRem;
-    const mainLabel = isRem ? 'مانده' : 'مصرف';
-    const subLabel = isRem ? 'مصرف' : 'مانده';
+    const mainLabel = isFa ? (isRem ? 'مانده' : 'مصرف') : (isRem ? 'Left' : 'Used');
+    const subLabel = isFa ? (isRem ? 'مصرف' : 'مانده') : (isRem ? 'Used' : 'Left');
 
     const weeklyRem = Math.round(currentUsage.weekly?.remaining_pct ?? (100 - Math.round(currentUsage.weekly?.used_pct ?? 0)));
     const weeklyUsed = Math.round(currentUsage.weekly?.used_pct ?? (100 - weeklyRem));
@@ -1640,7 +1644,7 @@
     }
 
     const BUILTIN_FONTS_EN = [
-      { id: 'default', label: 'پیش‌فرض' },
+      { id: 'default', label: isFa ? 'پیش‌فرض' : 'Default' },
       { id: 'Fredoka', label: 'Fredoka' },
       { id: 'Outfit', label: 'Outfit' },
       { id: 'Space Grotesk', label: 'Space' },
@@ -1650,22 +1654,22 @@
     ];
 
     const BUILTIN_FONTS_FA = [
-      { id: 'default', label: 'پیش‌فرض' },
-      { id: 'Vazirmatn', label: 'وزیرمتن' },
-      { id: 'Estedad', label: 'استعداد' },
-      { id: 'Sahel', label: 'ساحل' },
-      { id: 'Shabnam', label: 'شبنم' },
-      { id: 'Samim', label: 'صمیم' },
-      { id: 'Lalezar', label: 'لاله‌زار' },
-      { id: 'Noto Sans Arabic', label: 'نوتو عربی' },
-      { id: 'IRANSansX', label: 'ایران‌سنس' },
-      { id: 'B Yekan', label: 'یکان' }
+      { id: 'default', label: isFa ? 'پیش‌فرض' : 'Default' },
+      { id: 'Vazirmatn', label: isFa ? 'وزیرمتن' : 'Vazirmatn' },
+      { id: 'Estedad', label: isFa ? 'استعداد' : 'Estedad' },
+      { id: 'Sahel', label: isFa ? 'ساحل' : 'Sahel' },
+      { id: 'Shabnam', label: isFa ? 'شبنم' : 'Shabnam' },
+      { id: 'Samim', label: isFa ? 'صمیم' : 'Samim' },
+      { id: 'Lalezar', label: isFa ? 'لاله‌زار' : 'Lalezar' },
+      { id: 'Noto Sans Arabic', label: isFa ? 'نوتو عربی' : 'Noto Arabic' },
+      { id: 'IRANSansX', label: isFa ? 'ایران‌سنس' : 'IRANSansX' },
+      { id: 'B Yekan', label: isFa ? 'یکان' : 'Yekan' }
     ];
 
     const importedEn = customImportedFonts.filter(f => f.type === 'en');
     const importedFa = customImportedFonts.filter(f => f.type === 'fa');
 
-        const { accEmail, accName, accAvatar, accTier, accTierCode, initialChar, tierBadgeBg, tierBadgeColor, tierBadgeBorder } = getActiveAccountInfo();
+    const { accEmail, accName, accAvatar, accTier, accTierCode, initialChar, tierBadgeBg, tierBadgeColor, tierBadgeBorder } = getActiveAccountInfo();
     displayEmail = isPrivacyMode ? '••••••••••••@gmail.com' : (accEmail || 'user@example.com');
 
     let quickSwitchChipsHtml = '';
@@ -1675,18 +1679,18 @@
         quickSwitchChipsHtml = otherAccounts.map(k => {
           const acc = swState.savedAccounts[k] || {};
           const shortName = acc.name || k.split('@')[0];
-          return `<button type="button" data-switch-quick="${k}" title="سوئیچ آنی به ${k}" style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:6px;background:rgba(255,255,255,0.06);border:1px solid ${theme.itemBorder};color:${theme.textColor};font-size:9px;font-weight:600;cursor:pointer;white-space:nowrap;transition:all 0.15s ease;">
+          return `<button type="button" data-switch-quick="${k}" title="${isFa ? `سوئیچ آنی به ${k}` : `Quick switch to ${k}`}" style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:6px;background:rgba(255,255,255,0.06);border:1px solid ${theme.itemBorder};color:${theme.textColor};font-size:9px;font-weight:600;cursor:pointer;white-space:nowrap;transition:all 0.15s ease;">
             <span style="color:#fbbf24;font-size:9px;">⚡️</span>
             <span dir="ltr">${shortName}</span>
           </button>`;
         }).join('');
       } else {
-        quickSwitchChipsHtml = `<span style="font-size:9px;color:${theme.subText};opacity:0.75;font-family:${fontFa};">تنها ۱ حساب ذخیره است</span>`;
+        quickSwitchChipsHtml = `<span style="font-size:9px;color:${theme.subText};opacity:0.75;font-family:${uiFont};">${isFa ? 'تنها ۱ حساب ذخیره است' : 'Only 1 saved account'}</span>`;
       }
     }
     pop.innerHTML = `
       <!-- 1. Header Area: Active Account, Privacy & Fast Window Controls -->
-      <div id="aqm-drag-handle" style="display:flex;justify-content:space-between;align-items:center;direction:ltr;cursor:grab;user-select:none;padding-bottom:8px;border-bottom:1px solid ${theme.itemBorder};" title="جهت جابه‌جایی پنجره بکشید (دوبار کلیک برای بازنشانی موقعیت)">
+      <div id="aqm-drag-handle" style="display:flex;justify-content:space-between;align-items:center;direction:ltr;cursor:grab;user-select:none;padding-bottom:8px;border-bottom:1px solid ${theme.itemBorder};" title="${isFa ? 'جهت جابه‌جایی پنجره بکشید (دوبار کلیک برای بازنشانی موقعیت)' : 'Drag to move window (double-click to reset position)'}">
         <div style="display:flex;align-items:center;gap:9px;">
           <div style="position:relative;width:32px;height:32px;border-radius:50%;overflow:hidden;border:1.5px solid ${theme.cardBorder};background:${theme.chipBg};display:flex;align-items:center;justify-content:center;box-shadow:inset 0 1px 1px rgba(255,255,255,0.2);">
             ${accAvatar ? `<img src="${accAvatar}" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';if(this.nextElementSibling)this.nextElementSibling.style.display='flex';" />` : ''}
@@ -1700,43 +1704,49 @@
             </div>
             <div style="display:flex;align-items:center;gap:5px;margin-top:0.5px;">
               <span data-font="en" style="font-size:10px;color:${theme.subText};opacity:0.85;font-family:${fontEn};">${displayEmail}</span>
-              <button id="aqm-privacy-btn" type="button" title="${isPrivacyMode ? 'نمایش ایمیل' : 'مخفی‌سازی ایمیل'}" style="background:none;border:none;cursor:pointer;font-size:9.5px;padding:0;line-height:1;color:${theme.subText};opacity:0.75;transition:opacity 0.2s ease;">
+              <button id="aqm-privacy-btn" type="button" title="${isPrivacyMode ? (isFa ? 'نمایش ایمیل' : 'Show Email') : (isFa ? 'مخفی‌سازی ایمیل' : 'Hide Email')}" style="background:none;border:none;cursor:pointer;font-size:9.5px;padding:0;line-height:1;color:${theme.subText};opacity:0.75;transition:opacity 0.2s ease;">
                 ${isPrivacyMode ? '🔒' : '👁'}
               </button>
             </div>
           </div>
         </div>
 
-        <div style="display:flex;align-items:center;gap:6px;">
-          <button id="aqm-refresh-btn" type="button" title="همگام‌سازی لحظه‌ای سهمیه" style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:${theme.itemBg};border:1px solid ${theme.itemBorder};color:${theme.accent};cursor:pointer;transition:all 0.2s ease;">
+        <div style="display:flex;align-items:center;gap:5px;">
+          <button id="aqm-pop-lang-btn" type="button" title="${isFa ? 'تغییر زبان به انگلیسی (EN)' : 'Switch Language to Persian (فا)'}" style="display:flex;align-items:center;justify-content:center;height:24px;padding:0 7px;border-radius:9999px;background:${theme.itemBg};border:1px solid ${theme.itemBorder};color:${theme.textColor};font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;">
+            ${isFa ? 'EN' : 'فا'}
+          </button>
+          <button id="aqm-pop-restart-btn" type="button" title="${isFa ? 'ری‌استارت برنامه Antigravity' : 'Restart Antigravity App'}" style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:${theme.itemBg};border:1px solid ${theme.itemBorder};color:#38bdf8;font-size:11px;cursor:pointer;transition:all 0.2s ease;">
+            🔄
+          </button>
+          <button id="aqm-refresh-btn" type="button" title="${isFa ? 'همگام‌سازی لحظه‌ای سهمیه' : 'Refresh Live Quota'}" style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:${theme.itemBg};border:1px solid ${theme.itemBorder};color:${theme.accent};cursor:pointer;transition:all 0.2s ease;">
             <span class="${isRefreshing ? 'aqm-rotating' : ''}">${SVGS.refresh}</span>
           </button>
-          <button id="aqm-close-btn" type="button" title="بستن پنجره" style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:${theme.itemBg};border:1px solid ${theme.itemBorder};color:${theme.subText};font-size:10.5px;cursor:pointer;transition:all 0.2s ease;">
+          <button id="aqm-close-btn" type="button" title="${isFa ? 'بستن پنجره' : 'Close'}" style="display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:${theme.itemBg};border:1px solid ${theme.itemBorder};color:${theme.subText};font-size:10.5px;cursor:pointer;transition:all 0.2s ease;">
             ✕
           </button>
         </div>
       </div>
       <!-- 2. Fast Account Switcher Bar -->
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid ${theme.itemBorder};direction:rtl;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid ${theme.itemBorder};direction:${uiDir};">
         <div style="display:flex;align-items:center;gap:5px;overflow-x:auto;max-width:300px;" class="aqm-custom-scroll">
-          <span data-font="fa" style="font-size:9.5px;color:${theme.subText};font-weight:600;white-space:nowrap;font-family:${fontFa};">سوئیچ سریع:</span>
+          <span style="font-size:9.5px;color:${theme.subText};font-weight:600;white-space:nowrap;font-family:${uiFont};">${isFa ? 'سوئیچ سریع:' : 'Quick Switch:'}</span>
           ${quickSwitchChipsHtml}
         </div>
-        <button id="aqm-account-switcher-trigger" type="button" data-font="fa" title="مدیریت کامل حساب‌ها و مهاجرت گفتگوها" style="display:inline-flex;align-items:center;gap:4px;padding:2.5px 8px;border-radius:7px;background:${theme.itemBg};border:1px solid ${theme.itemBorder};color:${theme.accent};font-size:9.5px;font-weight:700;cursor:pointer;white-space:nowrap;transition:all 0.15s ease;font-family:${fontFa};">
-          <span>⚡️ مدیریت حساب‌ها</span>
+        <button id="aqm-account-switcher-trigger" type="button" title="${isFa ? 'مدیریت کامل حساب‌ها' : 'Manage Accounts'}" style="display:inline-flex;align-items:center;gap:4px;padding:2.5px 8px;border-radius:7px;background:${theme.itemBg};border:1px solid ${theme.itemBorder};color:${theme.accent};font-size:9.5px;font-weight:700;cursor:pointer;white-space:nowrap;transition:all 0.15s ease;font-family:${uiFont};">
+          <span>${isFa ? '⚡️ مدیریت حساب‌ها' : '⚡️ Accounts'}</span>
         </button>
       </div>
 
       <!-- 3. Unified 3-Tab Bar -->
-      <div style="display:flex;padding:2px;border-radius:10px;background:rgba(0,0,0,0.28);border:1px solid ${theme.itemBorder};margin:8px 0 9px 0;direction:rtl;">
-        <button id="aqm-tab-btn-quota" type="button" data-font="fa" style="flex:1;padding:4px 0;border:none;border-radius:7px;background:${activePopoverTab === 'quota' ? theme.accentGrad : 'transparent'};color:${activePopoverTab === 'quota' ? (theme.isDark ? '#080d16' : '#ffffff') : theme.subText};font-size:10.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;font-family:${fontFa};display:flex;align-items:center;justify-content:center;gap:4px;">
-          <span>📊</span><span>سهمیه و مدل‌ها</span>
+      <div style="display:flex;padding:2px;border-radius:10px;background:rgba(0,0,0,0.28);border:1px solid ${theme.itemBorder};margin:8px 0 9px 0;direction:${uiDir};">
+        <button id="aqm-tab-btn-quota" type="button" style="flex:1;padding:4px 0;border:none;border-radius:7px;background:${activePopoverTab === 'quota' ? theme.accentGrad : 'transparent'};color:${activePopoverTab === 'quota' ? (theme.isDark ? '#080d16' : '#ffffff') : theme.subText};font-size:10.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;font-family:${uiFont};display:flex;align-items:center;justify-content:center;gap:4px;">
+          <span>📊</span><span>${isFa ? 'سهمیه و مدل‌ها' : 'Quota & Models'}</span>
         </button>
-        <button id="aqm-tab-btn-fonts" type="button" data-font="fa" style="flex:1;padding:4px 0;border:none;border-radius:7px;background:${activePopoverTab === 'fonts' ? theme.accentGrad : 'transparent'};color:${activePopoverTab === 'fonts' ? (theme.isDark ? '#080d16' : '#ffffff') : theme.subText};font-size:10.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;font-family:${fontFa};display:flex;align-items:center;justify-content:center;gap:4px;">
-          <span>🔤</span><span>فونت و تایپوگرافی</span>
+        <button id="aqm-tab-btn-fonts" type="button" style="flex:1;padding:4px 0;border:none;border-radius:7px;background:${activePopoverTab === 'fonts' ? theme.accentGrad : 'transparent'};color:${activePopoverTab === 'fonts' ? (theme.isDark ? '#080d16' : '#ffffff') : theme.subText};font-size:10.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;font-family:${uiFont};display:flex;align-items:center;justify-content:center;gap:4px;">
+          <span>🔤</span><span>${isFa ? 'فونت و تایپوگرافی' : 'Typography'}</span>
         </button>
-        <button id="aqm-tab-btn-rtl" type="button" data-font="fa" style="flex:1;padding:4px 0;border:none;border-radius:7px;background:${activePopoverTab === 'rtl' ? theme.accentGrad : 'transparent'};color:${activePopoverTab === 'rtl' ? (theme.isDark ? '#080d16' : '#ffffff') : theme.subText};font-size:10.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;font-family:${fontFa};display:flex;align-items:center;justify-content:center;gap:4px;">
-          <span>✍️</span><span>راست‌چین هوشمند</span>
+        <button id="aqm-tab-btn-rtl" type="button" style="flex:1;padding:4px 0;border:none;border-radius:7px;background:${activePopoverTab === 'rtl' ? theme.accentGrad : 'transparent'};color:${activePopoverTab === 'rtl' ? (theme.isDark ? '#080d16' : '#ffffff') : theme.subText};font-size:10.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;font-family:${uiFont};display:flex;align-items:center;justify-content:center;gap:4px;">
+          <span>✍️</span><span>${isFa ? 'راست‌چین هوشمند' : 'Smart RTL'}</span>
         </button>
       </div>
 
@@ -1746,8 +1756,8 @@
         <div id="aqm-tab-content-quota" style="display:${activePopoverTab === 'quota' ? 'block' : 'none'};">
           <div style="display:flex;justify-content:flex-end;margin-bottom:6px;">
             <div style="display:flex;padding:2px;border-radius:9999px;background:rgba(0,0,0,0.25);border:1px solid ${theme.itemBorder};">
-              <button id="aqm-mode-rem-btn" type="button" data-font="fa" style="background:${isRem ? theme.accentGrad : 'transparent'};color:${isRem ? (theme.isDark ? '#0b111e' : '#ffffff') : theme.subText};border:none;padding:2px 7px;border-radius:9999px;font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;font-family:${fontFa};">مانده</button>
-              <button id="aqm-mode-used-btn" type="button" data-font="fa" style="background:${!isRem ? theme.accentGrad : 'transparent'};color:${!isRem ? (theme.isDark ? '#0b111e' : '#ffffff') : theme.subText};border:none;padding:2px 7px;border-radius:9999px;font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;font-family:${fontFa};">مصرف</button>
+              <button id="aqm-mode-rem-btn" type="button" style="background:${isRem ? theme.accentGrad : 'transparent'};color:${isRem ? (theme.isDark ? '#0b111e' : '#ffffff') : theme.subText};border:none;padding:2px 7px;border-radius:9999px;font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;font-family:${uiFont};">${isFa ? 'مانده' : 'Remaining'}</button>
+              <button id="aqm-mode-used-btn" type="button" style="background:${!isRem ? theme.accentGrad : 'transparent'};color:${!isRem ? (theme.isDark ? '#0b111e' : '#ffffff') : theme.subText};border:none;padding:2px 7px;border-radius:9999px;font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;font-family:${uiFont};">${isFa ? 'مصرف' : 'Used'}</button>
             </div>
           </div>
 <!-- Hero HUD Card: Decluttered, Pure & Minimal -->
@@ -1756,23 +1766,23 @@
           <!-- Left: Label & Reset time -->
           <div>
             <div data-font="en" style="font-size:11px;color:${theme.subText};font-weight:600;letter-spacing:0.04em;text-transform:uppercase;font-family:${fontEn};">
-              5-Hour Session Quota
+              ${isFa ? 'سهمیه نشست ۵ ساعته' : '5-Hour Session Quota'}
             </div>
-            <div data-font="fa" style="display:flex;align-items:center;gap:5px;font-size:10.5px;color:${theme.subText};margin-top:3px;font-family:${fontFa};">
-              <span>بازنشانی در</span>
+            <div style="display:flex;align-items:center;gap:5px;font-size:10.5px;color:${theme.subText};margin-top:3px;font-family:${uiFont};">
+              <span>${isFa ? 'بازنشانی در' : 'Resets at'}</span>
               <span style="font-weight:700;color:${theme.textColor};font-family:'JetBrains Mono',monospace;" data-font="mono" dir="ltr">${sessResetTime}</span>
               <span style="opacity:0.4;">•</span>
-              <span style="color:${theme.accent};font-weight:600;">${sessReset} مانده</span>
+              <span style="color:${theme.accent};font-weight:600;">${sessReset} ${isFa ? 'مانده' : 'left'}</span>
             </div>
           </div>
 
           <!-- Right: Big Percentage -->
-          <div style="text-align:right;direction:rtl;">
+          <div style="text-align:right;direction:${uiDir};">
             <div style="display:flex;align-items:baseline;gap:5px;justify-content:flex-end;">
               <span style="font-family:'JetBrains Mono',monospace;font-size:26px;font-weight:800;color:${theme.accent};letter-spacing:-0.03em;text-shadow:${theme.accentGlow};line-height:1;" data-font="mono" dir="ltr">${mainPct}%</span>
-              <span data-font="fa" style="font-size:11.5px;color:${theme.subText};font-weight:600;font-family:${fontFa};">${mainLabel}</span>
+              <span style="font-size:11.5px;color:${theme.subText};font-weight:600;font-family:${uiFont};">${mainLabel}</span>
             </div>
-            <div data-font="fa" style="font-size:10px;color:${theme.subText};margin-top:2px;font-family:${fontFa};">
+            <div style="font-size:10px;color:${theme.subText};margin-top:2px;font-family:${uiFont};">
               ${subLabel}: <strong style="color:${theme.textColor};font-family:'JetBrains Mono',monospace;" data-font="mono" dir="ltr">${subPct}%</strong>
             </div>
           </div>
@@ -1785,8 +1795,8 @@
 
         <!-- Weekly Quota Sub-Track -->
         <div style="margin-top:10px;padding-top:8px;border-top:1px solid ${theme.itemBorder};display:flex;justify-content:space-between;align-items:center;direction:ltr;">
-          <div data-font="fa" style="display:flex;align-items:center;gap:6px;font-size:10.5px;color:${theme.subText};font-family:${fontFa};">
-            <span style="font-weight:600;color:${theme.textColor};">سهمیه هفتگی:</span>
+          <div style="display:flex;align-items:center;gap:6px;font-size:10.5px;color:${theme.subText};font-family:${uiFont};">
+            <span style="font-weight:600;color:${theme.textColor};">${isFa ? 'سهمیه هفتگی:' : 'Weekly Quota:'}</span>
             <span style="font-family:'JetBrains Mono',monospace;font-weight:700;color:${theme.chipColor};" data-font="mono" dir="ltr">${weeklyShow}%</span>
             <span>${mainLabel}</span>
             <span style="opacity:0.5;">(${currentUsage.weekly?.resets_in || 'Ready'})</span>
@@ -1799,8 +1809,8 @@
 
       <!-- Models Section Header -->
       <div data-font="en" style="display:flex;justify-content:space-between;align-items:center;margin-top:14px;margin-bottom:7px;padding:0 4px;font-size:10px;font-weight:700;letter-spacing:0.06em;color:${theme.subText};direction:ltr;font-family:${fontEn};">
-        <span>ACTIVE MODEL POOLS</span>
-        <span>SESSION • WEEKLY</span>
+        <span>${isFa ? 'استخر مدل‌های فعال (ACTIVE POOLS)' : 'ACTIVE MODEL POOLS'}</span>
+        <span>${isFa ? 'نشست • هفتگی' : 'SESSION • WEEKLY'}</span>
       </div>
 
       <!-- Uniform Precision Model Cards -->
@@ -1814,20 +1824,20 @@
               </div>
 
         <!-- TAB 2: Fonts & Typography -->
-        <div id="aqm-tab-content-fonts" style="display:${activePopoverTab === 'fonts' ? 'block' : 'none'};direction:rtl;">
+        <div id="aqm-tab-content-fonts" style="display:${activePopoverTab === 'fonts' ? 'block' : 'none'};direction:${uiDir};">
 <!-- Typography Customizer Section -->
           <div style="margin:9px 0 7px 0;border-top:1px solid ${theme.itemBorder};padding-top:7px;">
-            <div data-font="fa" style="font-size:11px;font-weight:800;color:${theme.textColor};margin-bottom:6px;padding:0 2px;display:flex;justify-content:space-between;align-items:center;font-family:${fontFa};">
-              <span>تایپوگرافی و فونت</span>
+            <div style="font-size:11px;font-weight:800;color:${theme.textColor};margin-bottom:6px;padding:0 2px;display:flex;justify-content:space-between;align-items:center;font-family:${uiFont};">
+              <span>${isFa ? 'تایپوگرافی و فونت' : 'Typography & Fonts'}</span>
               <span data-font="en" style="font-size:8.5px;color:${theme.accent};font-family:${fontEn};">Persian & English</span>
             </div>
 
             <!-- English Font selector -->
             <div style="margin-bottom:7px;">
-              <div data-font="fa" style="font-size:9.5px;color:${theme.subText};margin-bottom:3px;font-family:${fontFa};">فونت انگلیسی و کد:</div>
+              <div style="font-size:9.5px;color:${theme.subText};margin-bottom:3px;font-family:${uiFont};">${isFa ? 'فونت انگلیسی و کد:' : 'English & Code Font:'}</div>
               <div style="display:flex;gap:3px;flex-wrap:wrap;">
                 ${BUILTIN_FONTS_EN.map(item => `
-                  <button type="button" data-font-en="${item.id}" style="background:${customFontEn === item.id ? theme.accentGrad : 'rgba(255,255,255,0.06)'};color:${customFontEn === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.textColor};border:1px solid ${customFontEn === item.id ? theme.cardBorder : 'rgba(255,255,255,0.08)'};padding:2px 6px;border-radius:6px;font-size:9px;font-weight:700;cursor:pointer;transition:all 0.15s ease;font-family:${item.id === 'default' ? fontFa : `'${item.id}', sans-serif`};">
+                  <button type="button" data-font-en="${item.id}" style="background:${customFontEn === item.id ? theme.accentGrad : 'rgba(255,255,255,0.06)'};color:${customFontEn === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.textColor};border:1px solid ${customFontEn === item.id ? theme.cardBorder : 'rgba(255,255,255,0.08)'};padding:2px 6px;border-radius:6px;font-size:9px;font-weight:700;cursor:pointer;transition:all 0.15s ease;font-family:${item.id === 'default' ? uiFont : `'${item.id}', sans-serif`};">
                     ${item.label}
                   </button>
                 `).join('')}
@@ -1836,7 +1846,7 @@
                     <button type="button" data-font-en="${item.id}" style="background:none;border:none;color:${customFontEn === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.textColor};font-size:9px;font-weight:700;cursor:pointer;padding:0;font-family:'${item.id}', sans-serif;">
                       ${item.data ? '📁 ' : ''}${item.name}
                     </button>
-                    <button type="button" data-delete-imported-font="${item.id}" title="حذف فونت" style="background:none;border:none;color:${customFontEn === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.subText};cursor:pointer;font-size:9.5px;padding:0 1px;line-height:1;opacity:0.75;">✕</button>
+                    <button type="button" data-delete-imported-font="${item.id}" title="${isFa ? 'حذف فونت' : 'Remove font'}" style="background:none;border:none;color:${customFontEn === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.subText};cursor:pointer;font-size:9.5px;padding:0 1px;line-height:1;opacity:0.75;">✕</button>
                   </div>
                 `).join('')}
               </div>
@@ -1844,10 +1854,10 @@
 
             <!-- Persian Font selector -->
             <div>
-              <div data-font="fa" style="font-size:9.5px;color:${theme.subText};margin-bottom:3px;font-family:${fontFa};">فونت فارسی و توضیحات:</div>
+              <div style="font-size:9.5px;color:${theme.subText};margin-bottom:3px;font-family:${uiFont};">${isFa ? 'فونت فارسی و توضیحات:' : 'Persian & RTL Font:'}</div>
               <div style="display:flex;gap:3px;flex-wrap:wrap;">
                 ${BUILTIN_FONTS_FA.map(item => `
-                  <button type="button" data-font-fa="${item.id}" style="background:${customFontFa === item.id ? theme.accentGrad : 'rgba(255,255,255,0.06)'};color:${customFontFa === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.textColor};border:1px solid ${customFontFa === item.id ? theme.cardBorder : 'rgba(255,255,255,0.08)'};padding:2px 7px;border-radius:6px;font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.15s ease;font-family:${item.id === 'default' ? fontFa : `'${item.id}', sans-serif`};">
+                  <button type="button" data-font-fa="${item.id}" style="background:${customFontFa === item.id ? theme.accentGrad : 'rgba(255,255,255,0.06)'};color:${customFontFa === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.textColor};border:1px solid ${customFontFa === item.id ? theme.cardBorder : 'rgba(255,255,255,0.08)'};padding:2px 7px;border-radius:6px;font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.15s ease;font-family:${item.id === 'default' ? uiFont : `'${item.id}', sans-serif`};">
                     ${item.label}
                   </button>
                 `).join('')}
@@ -1856,7 +1866,7 @@
                     <button type="button" data-font-fa="${item.id}" style="background:none;border:none;color:${customFontFa === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.textColor};font-size:9.5px;font-weight:700;cursor:pointer;padding:0;font-family:'${item.id}', sans-serif;">
                       ${item.data ? '📁 ' : ''}${item.name}
                     </button>
-                    <button type="button" data-delete-imported-font="${item.id}" title="حذف فونت" style="background:none;border:none;color:${customFontFa === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.subText};cursor:pointer;font-size:9.5px;padding:0 1px;line-height:1;opacity:0.75;">✕</button>
+                    <button type="button" data-delete-imported-font="${item.id}" title="${isFa ? 'حذف فونت' : 'Remove font'}" style="background:none;border:none;color:${customFontFa === item.id ? (theme.isDark ? '#080d16' : '#ffffff') : theme.subText};cursor:pointer;font-size:9.5px;padding:0 1px;line-height:1;opacity:0.75;">✕</button>
                   </div>
                 `).join('')}
               </div>
@@ -1865,9 +1875,9 @@
             <!-- Custom Font Import Section -->
             <div style="margin-top:7px;padding-top:6px;border-top:1px dashed ${theme.itemBorder};">
               <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
-                <span data-font="fa" style="font-size:9.5px;font-weight:700;color:${theme.textColor};font-family:${fontFa};">ایمپورت فونت سفارشی</span>
-                <button id="aqm-toggle-import-btn" type="button" style="background:${theme.chipBg};border:1px solid ${theme.itemBorder};border-radius:6px;color:${theme.accent};font-size:9px;font-weight:700;cursor:pointer;padding:2px 6px;font-family:${fontFa};">
-                  ${isImportFormOpen ? 'بستن فرم ▲' : '➕ افزودن فونت'}
+                <span style="font-size:9.5px;font-weight:700;color:${theme.textColor};font-family:${uiFont};">${isFa ? 'ایمپورت فونت سفارشی' : 'Import Custom Font'}</span>
+                <button id="aqm-toggle-import-btn" type="button" style="background:${theme.chipBg};border:1px solid ${theme.itemBorder};border-radius:6px;color:${theme.accent};font-size:9px;font-weight:700;cursor:pointer;padding:2px 6px;font-family:${uiFont};">
+                  ${isImportFormOpen ? (isFa ? 'بستن فرم ▲' : 'Close Form ▲') : (isFa ? '➕ افزودن فونت' : '➕ Add Font')}
                 </button>
               </div>
 
@@ -1875,40 +1885,40 @@
                 <!-- Local Font File Upload Button -->
                 <div>
                   <input id="aqm-import-file" type="file" accept=".woff2,.woff,.ttf,.otf" style="display:none;" />
-                  <label for="aqm-import-file" id="aqm-import-file-label" style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:5px 8px;border-radius:7px;background:${theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)'};border:1px dashed ${stagedFontFile ? '#10b981' : theme.itemBorder};color:${stagedFontFile ? '#10b981' : theme.accent};font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.15s ease;font-family:${fontFa};user-select:none;">
+                  <label for="aqm-import-file" id="aqm-import-file-label" style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:5px 8px;border-radius:7px;background:${theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)'};border:1px dashed ${stagedFontFile ? '#10b981' : theme.itemBorder};color:${stagedFontFile ? '#10b981' : theme.accent};font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.15s ease;font-family:${uiFont};user-select:none;">
                     <span style="display:flex;align-items:center;gap:6px;">
                       <span style="font-size:11px;">📁</span>
-                      <span id="aqm-import-file-text">${stagedFontFile ? `✓ ${stagedFontFile.fileName} (${stagedFontFile.sizeKb} KB)` : 'انتخاب یا آپلود فایل فونت (TTF, WOFF2, OTF)'}</span>
+                      <span id="aqm-import-file-text">${stagedFontFile ? `✓ ${stagedFontFile.fileName} (${stagedFontFile.sizeKb} KB)` : (isFa ? 'انتخاب یا آپلود فایل فونت (TTF, WOFF2, OTF)' : 'Select or Upload Font File (TTF, WOFF2, OTF)')}</span>
                     </span>
-                    <span id="aqm-import-file-badge" style="font-size:8px;padding:1px 5px;border-radius:4px;background:${stagedFontFile ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.08)'};color:${stagedFontFile ? '#10b981' : theme.subText};font-family:'JetBrains Mono',monospace;">${stagedFontFile ? stagedFontFile.format.toUpperCase() : 'فایل محلی'}</span>
+                    <span id="aqm-import-file-badge" style="font-size:8px;padding:1px 5px;border-radius:4px;background:${stagedFontFile ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.08)'};color:${stagedFontFile ? '#10b981' : theme.subText};font-family:'JetBrains Mono',monospace;">${stagedFontFile ? stagedFontFile.format.toUpperCase() : (isFa ? 'فایل محلی' : 'Local File')}</span>
                   </label>
                 </div>
 
-                <div style="display:flex;align-items:center;gap:5px;font-size:8px;color:${theme.subText};margin:1px 0;font-family:${fontFa};">
+                <div style="display:flex;align-items:center;gap:5px;font-size:8px;color:${theme.subText};margin:1px 0;font-family:${uiFont};">
                   <div style="flex:1;height:1px;background:${theme.itemBorder};opacity:0.6;"></div>
-                  <span>یا وارد کردن نام فونت / لینک وب‌فونت</span>
+                  <span>${isFa ? 'یا وارد کردن نام فونت / لینک وب‌فونت' : 'or enter font name / webfont URL'}</span>
                   <div style="flex:1;height:1px;background:${theme.itemBorder};opacity:0.6;"></div>
                 </div>
 
                 <div>
-                  <input id="aqm-import-name" type="text" value="${stagedFontFile ? stagedFontFile.name : ''}" placeholder="نام فونت (مثلاً IRANSansX یا Dana)" style="width:100%;box-sizing:border-box;background:${theme.isDark ? 'rgba(255,255,255,0.06)' : '#ffffff'};border:1px solid ${theme.itemBorder};border-radius:6px;padding:4px 7px;font-size:9.5px;color:${theme.textColor};outline:none;font-family:${fontFa};direction:rtl;" />
+                  <input id="aqm-import-name" type="text" value="${stagedFontFile ? stagedFontFile.name : ''}" placeholder="${isFa ? 'نام فونت (مثلاً IRANSansX یا Dana)' : 'Font Name (e.g. IRANSansX or Inter)'}" style="width:100%;box-sizing:border-box;background:${theme.isDark ? 'rgba(255,255,255,0.06)' : '#ffffff'};border:1px solid ${theme.itemBorder};border-radius:6px;padding:4px 7px;font-size:9.5px;color:${theme.textColor};outline:none;font-family:${uiFont};direction:${uiDir};" />
                 </div>
                 <div>
-                  <input id="aqm-import-url" type="text" placeholder="لینک وب‌فونت یا CSS (اختیاری اگر فایل یا فونت سیستم دارید)" style="width:100%;box-sizing:border-box;background:${theme.isDark ? 'rgba(255,255,255,0.06)' : '#ffffff'};border:1px solid ${theme.itemBorder};border-radius:6px;padding:4px 7px;font-size:9px;color:${theme.textColor};outline:none;font-family:'JetBrains Mono',monospace;direction:ltr;" />
+                  <input id="aqm-import-url" type="text" placeholder="${isFa ? 'لینک وب‌فونت یا CSS (اختیاری اگر فایل یا فونت سیستم دارید)' : 'Webfont or CSS URL (optional if local/system font)'}" style="width:100%;box-sizing:border-box;background:${theme.isDark ? 'rgba(255,255,255,0.06)' : '#ffffff'};border:1px solid ${theme.itemBorder};border-radius:6px;padding:4px 7px;font-size:9px;color:${theme.textColor};outline:none;font-family:'JetBrains Mono',monospace;direction:ltr;" />
                 </div>
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-top:2px;">
                   <div style="display:flex;gap:8px;font-size:9px;color:${theme.subText};align-items:center;">
-                    <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-family:${fontFa};">
+                    <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-family:${uiFont};">
                       <input type="radio" name="aqm-import-type" value="fa" checked style="accent-color:${theme.accent};" />
-                      فارسی
+                      ${isFa ? 'فارسی' : 'Persian'}
                     </label>
-                    <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-family:${fontFa};">
+                    <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-family:${uiFont};">
                       <input type="radio" name="aqm-import-type" value="en" style="accent-color:${theme.accent};" />
-                      انگلیسی
+                      ${isFa ? 'انگلیسی' : 'English'}
                     </label>
                   </div>
-                  <button id="aqm-import-submit-btn" type="button" style="background:${theme.accentGrad};color:${theme.isDark ? '#060d13' : '#ffffff'};border:none;border-radius:6px;padding:3.5px 10px;font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;box-shadow:${theme.accentGlow};font-family:${fontFa};">
-                    افزودن و اعمال
+                  <button id="aqm-import-submit-btn" type="button" style="background:${theme.accentGrad};color:${theme.isDark ? '#060d13' : '#ffffff'};border:none;border-radius:6px;padding:3.5px 10px;font-size:9.5px;font-weight:700;cursor:pointer;transition:all 0.2s ease;box-shadow:${theme.accentGlow};font-family:${uiFont};">
+                    ${isFa ? 'افزودن و اعمال' : 'Add & Apply'}
                   </button>
                 </div>
               </div>
@@ -1918,19 +1928,19 @@
                             </div>
 
         <!-- TAB 3: Smart RTL Suite -->
-        <div id="aqm-tab-content-rtl" style="display:${activePopoverTab === 'rtl' ? 'block' : 'none'};direction:rtl;">
+        <div id="aqm-tab-content-rtl" style="display:${activePopoverTab === 'rtl' ? 'block' : 'none'};direction:${uiDir};">
 <!-- Smart RTL & Persian Suite Section -->
           <div style="margin:8px 0;border-top:1px solid ${theme.itemBorder};padding-top:7px;">
-            <div data-font="fa" style="font-size:11px;font-weight:800;color:${theme.textColor};margin-bottom:6px;padding:0 2px;display:flex;justify-content:space-between;align-items:center;font-family:${fontFa};">
-              <span>پشتیبانی راست‌چین و فارسی (Smart RTL)</span>
+            <div style="font-size:11px;font-weight:800;color:${theme.textColor};margin-bottom:6px;padding:0 2px;display:flex;justify-content:space-between;align-items:center;font-family:${uiFont};">
+              <span>${isFa ? 'پشتیبانی راست‌چین و فارسی (Smart RTL)' : 'Smart RTL & Persian Suite'}</span>
               <span style="font-size:8.5px;color:${theme.accent};font-family:'JetBrains Mono',monospace;">Alt + R</span>
             </div>
 
             <!-- RTL Auto Direction Toggle Row -->
             <div id="aqm-rtl-toggle-row" style="display:flex;justify-content:space-between;align-items:center;padding:5px 7px;cursor:pointer;border-radius:8px;user-select:none;background:${theme.isDark ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.03)'};margin-bottom:4px;">
               <div style="display:flex;flex-direction:column;">
-                <span data-font="fa" style="font-size:10px;font-weight:700;color:${theme.textColor};font-family:${fontFa};">راست‌چین هوشمند</span>
-                <span data-font="fa" style="font-size:8.5px;color:${theme.subText};font-family:${fontFa};">تنظیم خودکار جهت پاراگراف‌ها بر اساس زبان</span>
+                <span style="font-size:10px;font-weight:700;color:${theme.textColor};font-family:${uiFont};">${isFa ? 'راست‌چین هوشمند' : 'Smart Auto-RTL'}</span>
+                <span style="font-size:8.5px;color:${theme.subText};font-family:${uiFont};">${isFa ? 'تنظیم خودکار جهت پاراگراف‌ها بر اساس زبان' : 'Auto-detect paragraph direction by language'}</span>
               </div>
               <div style="width:30px;height:17px;border-radius:9999px;background:${rtlConfig.isRTL ? theme.accent : (theme.isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.18)')};position:relative;transition:all 0.2s ease;">
                 <div style="width:13px;height:13px;border-radius:50%;background:#ffffff;position:absolute;top:2px;${rtlConfig.isRTL ? 'left:2px;' : 'right:2px;'};transition:all 0.2s cubic-bezier(0.16,1,0.3,1);box-shadow:0 1px 3px rgba(0,0,0,0.35);"></div>
@@ -1940,8 +1950,8 @@
             <!-- Force RTL Toggle Row -->
             <div id="aqm-rtl-force-row" style="display:flex;justify-content:space-between;align-items:center;padding:5px 7px;cursor:pointer;border-radius:8px;user-select:none;background:${theme.isDark ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.03)'};margin-bottom:4px;">
               <div style="display:flex;flex-direction:column;">
-                <span data-font="fa" style="font-size:10px;font-weight:700;color:${theme.textColor};font-family:${fontFa};">اجبار راست‌چین (Force RTL)</span>
-                <span data-font="fa" style="font-size:8.5px;color:${theme.subText};font-family:${fontFa};">راست‌چین کامل تمام پیام‌ها و چت‌ها</span>
+                <span style="font-size:10px;font-weight:700;color:${theme.textColor};font-family:${uiFont};">${isFa ? 'اجبار راست‌چین (Force RTL)' : 'Force Full RTL'}</span>
+                <span style="font-size:8.5px;color:${theme.subText};font-family:${uiFont};">${isFa ? 'راست‌چین کامل تمام پیام‌ها و چت‌ها' : 'Force right-to-left layout across all chat messages'}</span>
               </div>
               <div style="width:30px;height:17px;border-radius:9999px;background:${rtlConfig.forceRTL ? theme.accent : (theme.isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.18)')};position:relative;transition:all 0.2s ease;">
                 <div style="width:13px;height:13px;border-radius:50%;background:#ffffff;position:absolute;top:2px;${rtlConfig.forceRTL ? 'left:2px;' : 'right:2px;'};transition:all 0.2s cubic-bezier(0.16,1,0.3,1);box-shadow:0 1px 3px rgba(0,0,0,0.35);"></div>
@@ -1951,8 +1961,8 @@
             <!-- Fix @ Key Toggle Row -->
             <div id="aqm-rtl-at-row" style="display:flex;justify-content:space-between;align-items:center;padding:5px 7px;cursor:pointer;border-radius:8px;user-select:none;background:${theme.isDark ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.03)'};margin-bottom:6px;">
               <div style="display:flex;flex-direction:column;">
-                <span data-font="fa" style="font-size:10px;font-weight:700;color:${theme.textColor};font-family:${fontFa};">اصلاح کلید @ با Shift+2</span>
-                <span data-font="fa" style="font-size:8.5px;color:${theme.subText};font-family:${fontFa};">تایپ @ به جای کاما در کیبورد فارسی</span>
+                <span style="font-size:10px;font-weight:700;color:${theme.textColor};font-family:${uiFont};">${isFa ? 'اصلاح کلید @ با Shift+2' : 'Fix @ Key on Shift+2'}</span>
+                <span style="font-size:8.5px;color:${theme.subText};font-family:${uiFont};">${isFa ? 'تایپ @ به جای کاما در کیبورد فارسی' : 'Insert @ symbol on Shift+2 when using Persian keyboard'}</span>
               </div>
               <div style="width:30px;height:17px;border-radius:9999px;background:${rtlConfig.fixAtSign ? theme.accent : (theme.isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.18)')};position:relative;transition:all 0.2s ease;">
                 <div style="width:13px;height:13px;border-radius:50%;background:#ffffff;position:absolute;top:2px;${rtlConfig.fixAtSign ? 'left:2px;' : 'right:2px;'};transition:all 0.2s cubic-bezier(0.16,1,0.3,1);box-shadow:0 1px 3px rgba(0,0,0,0.35);"></div>
@@ -1962,15 +1972,15 @@
             <!-- Line Height & Font Size Controls -->
             <div style="display:flex;gap:6px;background:${theme.isDark ? 'rgba(0,0,0,0.25)' : 'rgba(0,0,0,0.03)'};padding:6px 8px;border-radius:8px;border:1px solid ${theme.itemBorder};">
               <div style="flex:1;">
-                <div style="display:flex;justify-content:space-between;font-size:9px;color:${theme.subText};margin-bottom:3px;font-family:${fontFa};">
-                  <span>فاصله خطوط:</span>
+                <div style="display:flex;justify-content:space-between;font-size:9px;color:${theme.subText};margin-bottom:3px;font-family:${uiFont};">
+                  <span>${isFa ? 'فاصله خطوط:' : 'Line Height:'}</span>
                   <span style="font-family:'JetBrains Mono',monospace;color:${theme.textColor};">${rtlConfig.lineHeight}</span>
                 </div>
                 <input id="aqm-rtl-lh-slider" type="range" min="1.2" max="2.4" step="0.1" value="${rtlConfig.lineHeight}" style="width:100%;accent-color:${theme.accent};cursor:pointer;height:3px;" />
               </div>
               <div style="flex:1;">
-                <div style="display:flex;justify-content:space-between;font-size:9px;color:${theme.subText};margin-bottom:3px;font-family:${fontFa};">
-                  <span>اندازه قلم:</span>
+                <div style="display:flex;justify-content:space-between;font-size:9px;color:${theme.subText};margin-bottom:3px;font-family:${uiFont};">
+                  <span>${isFa ? 'اندازه قلم:' : 'Font Size:'}</span>
                   <span style="font-family:'JetBrains Mono',monospace;color:${theme.textColor};">${rtlConfig.fontSize}px</span>
                 </div>
                 <input id="aqm-rtl-fs-slider" type="range" min="12" max="22" step="1" value="${rtlConfig.fontSize}" style="width:100%;accent-color:${theme.accent};cursor:pointer;height:3px;" />
@@ -1982,9 +1992,9 @@
       <!-- 4. Footer Area -->
 <!-- Luxury Footer -->
       <div style="margin-top:9px;display:flex;justify-content:space-between;align-items:center;font-size:10.5px;direction:ltr;">
-        <div data-font="fa" style="display:flex;align-items:center;gap:6px;color:${theme.subText};font-size:10px;font-family:${fontFa};">
+        <div style="display:flex;align-items:center;gap:6px;color:${theme.subText};font-size:10px;font-family:${uiFont};">
           <span style="width:5.5px;height:5.5px;border-radius:50%;background:#10b981;box-shadow:0 0 7px rgba(16,185,129,0.8);animation:aqm-pulse-dot 2s infinite ease-in-out;"></span>
-          <span style="opacity:0.88;">پایش بهینه مصرف • On-Demand</span>
+          <span style="opacity:0.88;">${isFa ? 'پایش بهینه مصرف • خودترمیم‌گر' : 'Live Quota Monitor • Self-Healing'}</span>
         </div>
         <div data-font="en" style="font-size:10px;color:${theme.subText};opacity:0.75;font-family:${fontEn};letter-spacing:0.02em;">
           Antigravity Quota HUD
@@ -2031,6 +2041,30 @@
       refreshBtn.onclick = (e) => {
         e.stopPropagation();
         refreshQuota();
+      };
+    }
+
+    const popLangBtn = pop.querySelector('#aqm-pop-lang-btn');
+    if (popLangBtn) {
+      popLangBtn.onclick = (e) => {
+        e.stopPropagation();
+        swLang = (swLang === 'fa') ? 'en' : 'fa';
+        try { localStorage.setItem('antigravity:switcher_lang', swLang); } catch(err){}
+        persistUserSettings({ lang: swLang });
+        renderBadge();
+        renderPopover();
+        const modal = document.getElementById('antigravity-switcher-modal');
+        if (modal && modal.classList.contains('aqm-active')) {
+          renderSwitcherModal();
+        }
+      };
+    }
+
+    const popRestartBtn = pop.querySelector('#aqm-pop-restart-btn');
+    if (popRestartBtn) {
+      popRestartBtn.onclick = (e) => {
+        e.stopPropagation();
+        restartAntigravityApp();
       };
     }
 
@@ -2904,6 +2938,11 @@
   } catch(e) {}
 
   let swLang = (userSettings && userSettings.lang) || localStorage.getItem('antigravity:switcher_lang') || 'fa';
+  if (swLang !== 'fa' && swLang !== 'en') swLang = 'fa';
+  let swAutoRestart = false;
+  try {
+    swAutoRestart = (localStorage.getItem('antigravity:auto_restart_on_switch') === 'true');
+  } catch (e) {}
   let swTab = 'accounts';
   let swSelectedConvs = new Set();
   let swMode = 'copy';
@@ -2933,7 +2972,7 @@
     }
     if (rawCandidate && typeof rawCandidate === 'string' && rawCandidate.trim()) {
       const c = rawCandidate.trim().split(' ')[0];
-      if (!c.toLowerCase().includes('user') && !c.toLowerCase().includes('ethan')) {
+      if (!c.toLowerCase().includes('user')) {
         return c.charAt(0).toUpperCase() + c.slice(1);
       }
     }
@@ -2950,11 +2989,28 @@
     return false;
   }
 
-  function switchAccount(accKey) {
+  function restartAntigravityApp() {
+    const isFa = (swLang === 'fa');
+    showSwitcherToast(isFa ? 'در حال ری‌استارت برنامه Antigravity... پلاگین به‌صورت خودکار متصل می‌شود 🔄' : 'Restarting Antigravity... Plugin will auto-inject on startup 🔄');
+    if (callDaemonIpc('restart_app', {})) return;
+    fetch('http://127.0.0.1:39281/api/restart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    }).catch(() => {});
+  }
+  window.restartAntigravityApp = restartAntigravityApp;
+
+  function switchAccount(accKey, forceRestart = null) {
     if (!accKey) return;
     const isFa = (swLang === 'fa');
-    showSwitcherToast(isFa ? `در حال جابجایی به ${accKey}...` : `Switching to ${accKey}...`);
-    const payload = { accountKey: accKey, noRestart: true };
+    const shouldRestart = (forceRestart !== null) ? Boolean(forceRestart) : Boolean(swAutoRestart);
+    showSwitcherToast(
+      shouldRestart
+        ? (isFa ? `در حال سوئیچ به ${accKey} و ری‌استارت برنامه...` : `Switching to ${accKey} & restarting app...`)
+        : (isFa ? `در حال جابجایی به ${accKey}...` : `Switching to ${accKey}...`)
+    );
+    const payload = { accountKey: accKey, noRestart: !shouldRestart };
 
     const finalizeSwitch = () => {
       fetchSwitcherState(() => {
@@ -3271,9 +3327,15 @@
           </div>
 
           <div style="display:flex;align-items:center;gap:8px;">
-            <!-- Language Switcher (Tri-Language EN / فا / ES) -->
-            <button id="aqm-lang-toggle-btn" title="Toggle Language (EN / فا / ES)" style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);color:#94a3b8;padding:2px 8px;border-radius:9999px;font-size:10.5px;font-weight:600;cursor:pointer;transition:all 0.15s;outline:none;">
-              ${swLang === 'fa' ? 'فا' : (swLang === 'es' ? 'ES' : 'EN')}
+            <!-- Restart App Button -->
+            <button id="aqm-sw-restart-app-btn" title="${isFa ? 'ری‌استارت برنامه Antigravity (با حفظ پلاگین)' : 'Restart Antigravity App'}" style="background:rgba(56,189,248,0.1);border:1px solid rgba(56,189,248,0.28);color:#38bdf8;padding:3px 9px;border-radius:9999px;font-size:10.5px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:4px;transition:all 0.15s;outline:none;">
+              <span>🔄</span>
+              <span>${isFa ? 'ری‌استارت برنامه' : 'Restart App'}</span>
+            </button>
+
+            <!-- Language Switcher (Bilingual FA / EN) -->
+            <button id="aqm-lang-toggle-btn" title="${isFa ? 'Switch to English (EN)' : 'تغییر زبان به فارسی (فا)'}" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:#e2e8f0;padding:3px 9px;border-radius:9999px;font-size:10.5px;font-weight:700;cursor:pointer;transition:all 0.15s;outline:none;">
+              ${isFa ? 'EN' : 'فا'}
             </button>
 
             <!-- Close Button -->
@@ -3281,12 +3343,17 @@
           </div>
         </div>
 
-        <!-- Tab Navigation Bar (Liquid Glass Pill Tabs) -->
-        <div style="display:flex;gap:6px;padding:8px 18px;border-bottom:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.12);overflow-x:auto;flex-shrink:0;" class="aqm-custom-scroll">
+        <!-- Tab Navigation Bar & Auto-Restart Switch -->
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 18px;border-bottom:1px solid rgba(255,255,255,0.06);background:rgba(0,0,0,0.12);flex-shrink:0;">
           <button class="aqm-sw-tab-btn active" id="aqm-tab-btn-accounts">
             <span>👤</span>
-            <span>${t.tabAccounts || (isFa ? 'حساب‌ها و سهمیه' : 'Accounts & Quota')}</span>
+            <span>${isFa ? 'حساب‌ها و سهمیه' : 'Accounts & Quota'}</span>
           </button>
+
+          <label id="aqm-sw-autorestart-row" style="display:inline-flex;align-items:center;gap:6px;font-size:10.5px;color:#cbd5e1;cursor:pointer;user-select:none;" title="${isFa ? 'اگر فعال باشد، پس از سوئیچ اکانت برنامه به‌طور خودکار ری‌استارت می‌شود' : 'Automatically restart Antigravity after switching accounts'}">
+            <input type="checkbox" id="aqm-sw-autorestart-chk" ${swAutoRestart ? 'checked' : ''} style="accent-color:#3b82f6;cursor:pointer;" />
+            <span>${isFa ? 'ری‌استارت خودکار پس از سوئیچ' : 'Auto-restart on switch'}</span>
+          </label>
         </div>
 
         <!-- Content Body (Scrollable) -->
@@ -3452,10 +3519,13 @@
                               <span>${isFa ? 'ورود با گوگل' : 'Sign In'}</span>
                             </button>
                           ` : `
-                            <button class="aqm-sw-btn aqm-sw-btn-primary" data-action="switch" data-acc="${k}" style="padding:3px 10px;font-size:11px;">
-                              <span>${t.switchNow || (isFa ? 'سوئیچ' : 'Switch')}</span>
+                            <button class="aqm-sw-btn aqm-sw-btn-primary" data-action="switch" data-acc="${k}" style="padding:3px 10px;font-size:11px;" title="${isFa ? 'سوئیچ فوری به این حساب' : 'Switch to this account'}">
+                              <span>⚡ ${isFa ? 'سوئیچ' : 'Switch'}</span>
                             </button>
-                                                      `}
+                            <button class="aqm-sw-btn" data-action="switch-restart" data-acc="${k}" style="padding:3px 8px;font-size:10.5px;color:#38bdf8;border-color:rgba(56,189,248,0.28);background:rgba(56,189,248,0.08);" title="${isFa ? 'سوئیچ به این حساب و ری‌استارت کامل برنامه' : 'Switch & Restart App'}">
+                              <span>🔄</span>
+                            </button>
+                          `}
                           <button class="aqm-sw-btn" data-action="delete" data-acc="${k}" title="${t.deleteAccount || (isFa ? 'حذف از لیست' : 'Delete')}" style="padding:3px 7px;font-size:10.5px;color:#94a3b8;border-color:transparent;background:transparent;">
                             <span>✕</span>
                           </button>
@@ -3480,12 +3550,30 @@
     const langBtn = modal.querySelector('#aqm-lang-toggle-btn');
     if (langBtn) {
       langBtn.onclick = () => {
-        if (swLang === 'en') swLang = 'fa';
-        else if (swLang === 'fa') swLang = 'es';
-        else swLang = 'en';
+        swLang = (swLang === 'fa') ? 'en' : 'fa';
         try { localStorage.setItem('antigravity:switcher_lang', swLang); } catch(e){}
         persistUserSettings({ lang: swLang });
         renderSwitcherModal();
+        if (typeof renderBadge === 'function') renderBadge();
+        const pop = document.getElementById('antigravity-usage-popover');
+        if (pop && pop.style.display !== 'none' && typeof renderPopover === 'function') {
+          renderPopover();
+        }
+      };
+    }
+
+    const restartAppBtn = modal.querySelector('#aqm-sw-restart-app-btn');
+    if (restartAppBtn) {
+      restartAppBtn.onclick = () => {
+        restartAntigravityApp();
+      };
+    }
+
+    const autoRestartChk = modal.querySelector('#aqm-sw-autorestart-chk');
+    if (autoRestartChk) {
+      autoRestartChk.onchange = () => {
+        swAutoRestart = Boolean(autoRestartChk.checked);
+        try { localStorage.setItem('antigravity:auto_restart_on_switch', String(swAutoRestart)); } catch(e){}
       };
     }
 
@@ -3635,6 +3723,14 @@
       btn.onclick = () => {
         const accKey = btn.getAttribute('data-acc');
         switchAccount(accKey);
+      };
+    });
+
+    // Switch & Restart Account action
+    modal.querySelectorAll('[data-action="switch-restart"]').forEach(btn => {
+      btn.onclick = () => {
+        const accKey = btn.getAttribute('data-acc');
+        switchAccount(accKey, true);
       };
     });
 

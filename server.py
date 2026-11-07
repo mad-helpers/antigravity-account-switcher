@@ -335,50 +335,100 @@ def restart_language_server():
 
 
 def restart_antigravity(force=False):
-    """Request normal app exit, wait for its engine, and fail closed on timeout."""
+    """Gracefully close Antigravity, clean stale port files, and relaunch visibly on the interactive desktop."""
     sys_name = quota_engine.get_current_system()
     if sys_name == 'windows':
         import psutil
         try:
-            mains, engines = _primary_antigravity_processes()
-            # Retain the installation that actually owns the primary profile.
-            # Another installed copy must not replace it merely due to path order.
-            owners = {os.path.normcase(os.path.abspath(p.info['exe'])):p.info['exe'] for p in mains}
-            for process in engines:
-                engine_exe = process.info['exe']
-                owner = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(engine_exe))), 'Antigravity.exe')
-                owners.setdefault(os.path.normcase(os.path.abspath(owner)), owner)
-            if len(owners) > 1:
-                print('[RESTART] Refused: multiple installations own the primary profile', flush=True)
-                return False
-            exe = next(iter(owners.values()), None)
-            if exe is None:
+            primary_data = os.path.normcase(os.path.abspath(os.path.join(
+                os.environ.get('APPDATA') or os.path.join(os.path.expanduser('~'), 'AppData', 'Roaming'), 'Antigravity')))
+            mains, engines = [], []
+            exe = None
+            for proc in psutil.process_iter(['pid', 'name', 'exe', 'cmdline']):
+                try:
+                    info = proc.info
+                    name = (info.get('name') or '').lower()
+                    if name not in ('antigravity.exe', 'language_server.exe'):
+                        continue
+                    p_exe = info.get('exe') or ''
+                    args = info.get('cmdline') or []
+                    if name == 'antigravity.exe' and p_exe and os.path.exists(p_exe) and not exe:
+                        exe = p_exe
+                    # Skip secondary isolated instances if they specify a different --user-data-dir
+                    data_dir = None
+                    for idx, arg in enumerate(args):
+                        if arg.startswith('--user-data-dir='):
+                            data_dir = arg.split('=', 1)[1].strip('"')
+                        elif arg == '--user-data-dir' and idx + 1 < len(args):
+                            data_dir = args[idx + 1].strip('"')
+                    if data_dir and os.path.normcase(os.path.abspath(data_dir)) != primary_data:
+                        continue
+                    if name == 'antigravity.exe':
+                        mains.append(proc)
+                    else:
+                        engines.append(proc)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+
+            if not exe or not os.path.exists(exe):
                 exe = next((path for path in _antigravity_executable_paths() if os.path.exists(path)), None)
             if not exe or not os.path.exists(exe):
                 print('[RESTART] Refused: owning executable is unavailable', flush=True)
                 return False
-            for process in mains:
-                result = subprocess.run(
-                    ['powershell', '-NoProfile', '-Command',
-                     f'Get-Process -Id {int(process.pid)} -ErrorAction SilentlyContinue | ForEach-Object {{ $_.CloseMainWindow() | Out-Null }}'],
-                    capture_output=True, creationflags=0x08000000, timeout=10)
-                if result.returncode != 0:
-                    print('[RESTART] Refused: normal window-close request failed', flush=True)
-                    return False
-            _, alive = psutil.wait_procs(mains + engines, timeout=15)
+
+            # 1. Request graceful main window close first
+            top_mains = [p for p in mains if not any(a.startswith('--type=') for a in (p.info.get('cmdline') or []))]
+            for process in (top_mains or mains):
+                try:
+                    subprocess.run(
+                        ['powershell', '-NoProfile', '-Command',
+                         f'Get-Process -Id {int(process.pid)} -ErrorAction SilentlyContinue | ForEach-Object {{ $_.CloseMainWindow() | Out-Null }}'],
+                        capture_output=True, creationflags=0x08000000, timeout=4)
+                except Exception:
+                    pass
+
+            _, alive = psutil.wait_procs(mains + engines, timeout=4)
             if alive:
-                print('[RESTART] Refused: primary app or database writer remains active', flush=True)
-                return False
-            # Re-check every supported install after waiting. A newly launched
-            # primary must not receive a second launcher from this request.
-            current_mains, current_engines = _primary_antigravity_processes()
-            if current_mains or current_engines:
-                print('[RESTART] Refused: primary app or writer appeared during shutdown', flush=True)
-                return False
+                for p in alive:
+                    try:
+                        p.terminate()
+                    except Exception:
+                        pass
+                _, still_alive = psutil.wait_procs(alive, timeout=4)
+                for p in still_alive:
+                    try:
+                        p.kill()
+                    except Exception:
+                        pass
+
+            # 2. Remove stale DevToolsActivePort and SingletonLock so new process writes fresh port
+            for stale_name in ('DevToolsActivePort', 'SingletonLock'):
+                stale_file = os.path.join(primary_data, stale_name)
+                if os.path.exists(stale_file):
+                    try:
+                        os.remove(stale_file)
+                    except Exception:
+                        pass
+
+            time.sleep(0.5)
+
+            # 3. Relaunch visibly on WinSta0\Default
             env = dict(os.environ)
             env.setdefault('GOMEMLIMIT', '3GiB')
             env.setdefault('GOGC', '50')
-            subprocess.Popen([exe], env=env, creationflags=0x00000008 | 0x00000200 | 0x08000000)
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = 1  # SW_SHOWNORMAL
+            si.lpDesktop = r"WinSta0\Default"
+            subprocess.Popen(
+                [exe],
+                cwd=os.path.dirname(exe),
+                env=env,
+                startupinfo=si,
+                creationflags=0x00000200,
+                close_fds=True
+            )
+            print(f'[RESTART] Launched {exe} cleanly on interactive desktop.', flush=True)
             return True
         except Exception as error:
             print(f'[RESTART] Safe restart did not complete: {error}', flush=True)
@@ -1096,25 +1146,44 @@ def switch_account(account_key, no_restart=True):
     tier = entry.get('tier', 'Google AI Pro')
     tier_code = entry.get('tier_code', 'pro')
     rem = entry.get('remaining_pct', 100.0)
-    quota_data = {
-        'email': email,
-        'name': clean_name,
-        'tier': tier,
-        'tier_code': tier_code,
-        'session': {
-            'name': 'Gemini Models',
-            'used_pct': round(100.0 - rem, 1),
-            'remaining_pct': round(rem, 1),
-            'resets_in': 'Ready'
-        },
-        'pools': [
-            {'name': 'Gemini 3.8 Flash High', 'used_pct': round(100.0 - rem, 1), 'remaining_pct': round(rem, 1), 'resets_in': 'Ready'},
-            {'name': 'Gemini 3.1 Pro', 'used_pct': round(100.0 - rem, 1), 'remaining_pct': round(rem, 1), 'resets_in': 'Ready'},
-            {'name': 'Argon', 'used_pct': 100.0, 'remaining_pct': 0.0, 'resets_in': '4 d', 'weekly_rem': 0.0, 'weekly_pct': 100.0, 'weekly_resets': '4 d'},
-            {'name': 'Claude Sonnet 4.6', 'used_pct': 0.0, 'remaining_pct': 100.0, 'resets_in': 'Ready'},
-            {'name': 'GPT-OSS 120B', 'used_pct': 0.0, 'remaining_pct': 100.0, 'resets_in': 'Ready'}
-        ]
-    }
+    quota_data = None
+    try:
+        fresh_q = quota_engine.fetch_quota_and_tier(token)
+        if fresh_q and fresh_q.get('session'):
+            quota_data = fresh_q
+            quota_data['email'] = email
+            if not quota_data.get('name'):
+                quota_data['name'] = clean_name
+            entry['remaining_pct'] = quota_data.get('session', {}).get('remaining_pct', rem)
+            entry['tier'] = quota_data.get('tier', tier)
+            entry['tier_code'] = quota_data.get('tier_code', tier_code)
+    except Exception:
+        pass
+
+    if not quota_data:
+        quota_data = {
+            'email': email,
+            'name': clean_name,
+            'tier': tier,
+            'tier_code': tier_code,
+            'session': {
+                'name': 'Gemini Models',
+                'used_pct': round(100.0 - rem, 1),
+                'remaining_pct': round(rem, 1),
+                'resets_in': 'Ready'
+            },
+            'pools': [
+                {'name': 'Gemini 3.8 Flash High', 'used_pct': round(100.0 - rem, 1), 'remaining_pct': round(rem, 1), 'resets_in': 'Ready'},
+                {'name': 'Gemini 3.1 Pro', 'used_pct': round(100.0 - rem, 1), 'remaining_pct': round(rem, 1), 'resets_in': 'Ready'},
+                {'name': 'Argon', 'used_pct': 100.0, 'remaining_pct': 0.0, 'resets_in': '4 d', 'weekly_rem': 0.0, 'weekly_pct': 100.0, 'weekly_resets': '4 d'},
+                {'name': 'Claude Sonnet 4.6', 'used_pct': 0.0, 'remaining_pct': 100.0, 'resets_in': 'Ready'},
+                {'name': 'GPT-OSS 120B', 'used_pct': 0.0, 'remaining_pct': 100.0, 'resets_in': 'Ready'}
+            ]
+        }
+
+    entry['last_Active'] = time.strftime("%Y-%m-%d %H:%M:%S")
+    manifest[account_key] = entry
+    save_manifest(manifest)
 
     global_quota_path = Path.home() / ".gemini" / "antigravity" / "active_quota.json"
     try:
@@ -1123,16 +1192,6 @@ def switch_account(account_key, no_restart=True):
             json.dump(quota_data, f, indent=2, ensure_ascii=False)
     except Exception:
         pass
-
-    def _bg_fetch():
-        try:
-            fresh = quota_engine.fetch_quota_and_tier(token)
-            if fresh:
-                with open(global_quota_path, 'w', encoding='utf-8') as f:
-                    json.dump(fresh, f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
-    threading.Thread(target=_bg_fetch, daemon=True).start()
 
     try:
         active_inst1_file = Path.home() / ".gemini" / "accounts" / "active_instance_1.txt"
@@ -1154,6 +1213,8 @@ def switch_account(account_key, no_restart=True):
             with open(storage_path, 'r', encoding='utf-8') as f:
                 storage_data = json.load(f)
         storage_data["antigravity:account_email"] = email
+        storage_data["agy.onboarding.lastLoginUsername"] = email
+        storage_data["jetski.onboarding.lastLoginUsername"] = email
         storage_data["antigravity:active_quota"] = json.dumps(quota_data)
         storage_path.parent.mkdir(parents=True, exist_ok=True)
         with open(storage_path, 'w', encoding='utf-8') as f:
@@ -1749,6 +1810,9 @@ class SwitcherHTTPHandler(SimpleHTTPRequestHandler):
         elif self.path == '/api/switch':
             acc_key = data.get('accountKey')
             resp = switch_account(acc_key, no_restart=data.get('noRestart', True))
+        elif self.path in ('/api/restart', '/api/restart_app'):
+            threading.Thread(target=restart_after_account_switch, daemon=True).start()
+            resp = {'success': True, 'msg': 'Restarting Antigravity...'}
         elif self.path in ('/api/launch_dual', '/api/launch_instance'):
             acc_key = data.get('accountKey') or data.get('account') or data.get('email')
             project_path = data.get('projectPath') or data.get('path')
