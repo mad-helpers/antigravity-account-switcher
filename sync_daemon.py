@@ -518,6 +518,14 @@ _cdp_conns_lock = threading.Lock()
 _active_cdp_ws = None
 _active_cdp_loop = None
 
+def _safe_allowed_convs(m_eng, account):
+    """A broken conversations store (e.g. dangling junction) must not blank the injected plugin."""
+    try:
+        return m_eng.get_allowed_conversations(account) if hasattr(m_eng, 'get_allowed_conversations') else []
+    except Exception as e:
+        log(f"[WARN] get_allowed_conversations failed: {e!r}")
+        return []
+
 def get_injector_script(usage=None, instance_id="instance_1", account_email=None):
     if not INJECTOR_PATH.exists():
         return ""
@@ -561,7 +569,7 @@ def get_injector_script(usage=None, instance_id="instance_1", account_email=None
                 instance_usage = usage
 
         usage_json = json.dumps(instance_usage or {}, ensure_ascii=False)
-        allowed_convs = m_eng.get_allowed_conversations(actual_account) if hasattr(m_eng, 'get_allowed_conversations') else []
+        allowed_convs = _safe_allowed_convs(m_eng, actual_account)
 
         accounts_payload = json.dumps({
             "activeAccount": instance_usage,
@@ -602,7 +610,8 @@ def get_injector_script(usage=None, instance_id="instance_1", account_email=None
             "  if (typeof window.__renderAntigravityBadge === 'function') window.__renderAntigravityBadge();\n"
             "})();\n"
         )
-    except Exception:
+    except Exception as e:
+        log(f"[INJECTOR ERROR] get_injector_script failed: {e!r}")
         return ""
 
 def inject_badge_via_devtools(port, usage=None, instance_id="instance_1", account_email=None):
@@ -1230,7 +1239,7 @@ async def cdp_broadcast_state(ws, extra_toast=None, instance_id="instance_1", ac
         conversations = []
         projects = []
         tasks = []
-        allowed_convs = m_eng.get_allowed_conversations(actual_account) if hasattr(m_eng, 'get_allowed_conversations') else []
+        allowed_convs = _safe_allowed_convs(m_eng, actual_account)
 
         running_accounts = {}
         try:

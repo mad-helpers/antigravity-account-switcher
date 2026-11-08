@@ -94,15 +94,9 @@ def norm_account(acc):
 
 def ensure_dirs():
     """Ensure all required directories exist."""
-    os.makedirs(CONVERSATIONS_DIR, exist_ok=True)
-    os.makedirs(BRAIN_DIR, exist_ok=True)
-    os.makedirs(ACCOUNTS_DIR, exist_ok=True)
-    os.makedirs(BACKUP_DIR, exist_ok=True)
-    os.makedirs(TASKS_DIR, exist_ok=True)
-    os.makedirs(SCHEDULED_DIR, exist_ok=True)
-    if not os.path.exists(CONFIG_PROJECTS_DIR):
+    for p in (CONVERSATIONS_DIR, BRAIN_DIR, ACCOUNTS_DIR, BACKUP_DIR, TASKS_DIR, SCHEDULED_DIR, CONFIG_PROJECTS_DIR):
         try:
-            os.makedirs(CONFIG_PROJECTS_DIR, exist_ok=True)
+            os.makedirs(p, exist_ok=True)
         except Exception:
             pass
 
@@ -2078,7 +2072,7 @@ def is_account2(email):
     if not email:
         return False
     norm = str(email).lower().strip()
-    return norm in ('instance_2', 'secondary_account', 'user2@example.com') or 'account2' in norm or 'secondary' in norm
+    return norm in ('instance_2', 'secondary_account', 'bombhub.apk@gmail.com') or 'bombhub' in norm or 'account2' in norm
 
 if __name__ == '__main__':
     import argparse
