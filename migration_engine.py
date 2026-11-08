@@ -12,6 +12,7 @@ Description:
 import os
 import sys
 import glob
+import platform
 import json
 import uuid
 import time

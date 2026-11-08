@@ -15,6 +15,7 @@ import socket
 import time
 import subprocess
 import threading
+import urllib.request
 from pathlib import Path
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
@@ -1672,7 +1673,7 @@ class SwitcherHTTPHandler(SimpleHTTPRequestHandler):
                             inst_acc = s_k
                             break
                 if not inst_acc:
-                    primary = get_primary_account()
+                    primary = migration_engine.get_primary_account()
                     inst_acc = next((k for k in saved.keys() if k != primary), None)
 
                 entry = saved.get(inst_acc, {}) if inst_acc else {}
@@ -1977,7 +1978,7 @@ def launch_gui(port=PORT):
 
 if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] in ('--launch', '--launch-instance', '--focus'):
-        target = sys.argv[2] if len(sys.argv) > 2 else get_secondary_account()
+        target = sys.argv[2] if len(sys.argv) > 2 else migration_engine.get_secondary_account()
         res = launch_dual_instance(target)
         print(f"Multi-instance launch result for {target}: {res}")
         sys.exit(0 if res.get('success') else 1)

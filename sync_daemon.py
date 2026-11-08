@@ -836,7 +836,6 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
         try:
             import server as srv_mod
             if self.path.startswith('/sync') or self.path.startswith('/quota') or self.path.startswith('/api/quota'):
-                import urllib.parse
                 parsed = urllib.parse.urlparse(self.path)
                 q_params = urllib.parse.parse_qs(parsed.query)
                 req_inst = q_params.get('instance', [None])[0]
@@ -1577,6 +1576,9 @@ async def cdp_instance_worker(instance_id, port, default_account):
                 await ws.send(json.dumps({"id": 4, "method": "Runtime.addBinding", "params": {"name": "__aqm_daemon_ipc"}}))
                 cur_acc = _active_cdp_connections.get(instance_id, {}).get("account") or default_account
                 init_script = get_injector_script(_cached_usage, instance_id=instance_id, account_email=cur_acc)
+                if not init_script:
+                    log(f"[CDP] [{instance_id}] Injector script empty ({reason}); skipping inject.")
+                    return
                 if init_script:
                     await ws.send(json.dumps({
                         "id": 5,
