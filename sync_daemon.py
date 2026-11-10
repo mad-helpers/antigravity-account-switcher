@@ -688,7 +688,25 @@ def sync_quota_once(force=False, inject=False):
 _oauth_lock = threading.Lock()
 _active_oauth = {'running': False, 'auth_url': '', 'start_time': 0, 'target': None}
 
-def start_shared_oauth_flow(target_account=None):
+def _eval_all_instances(js_code):
+    """Run JS in every connected Antigravity window (the legacy single-ws globals are never assigned)."""
+    with _cdp_conns_lock:
+        conns = list(_active_cdp_connections.values())
+    for c in conns:
+        try:
+            if c.get("ws") and c.get("loop"):
+                asyncio.run_coroutine_threadsafe(
+                    c["ws"].send(json.dumps({
+                        "id": int(time.time() * 1000) % 1000000,
+                        "method": "Runtime.evaluate",
+                        "params": {"expression": js_code}
+                    })),
+                    c["loop"]
+                )
+        except Exception:
+            pass
+
+def start_shared_oauth_flow(target_account=None, auto_switch=False):
     global _active_oauth
     with _oauth_lock:
         now = time.time()
@@ -720,42 +738,40 @@ def start_shared_oauth_flow(target_account=None):
             _active_oauth['auth_url'] = u
         auth_url_holder.append(u)
         log(f"[OAUTH] OAuth URL generated: {u[:60]}...")
-        if _active_cdp_ws and _active_cdp_loop:
-            safe_url = json.dumps(u)
-            toast_msg = json.dumps(f'مرورگر باز شد. اگر باز نشد، <a href="{u}" target="_blank" style="color:#93c5fd;text-decoration:underline;font-weight:700;">اینجا کلیک کنید</a>', ensure_ascii=False)
-            js_code = f"""(() => {{
-                try {{ window.open({safe_url}, '_blank'); }} catch(e) {{}}
-                if (typeof window.__showSwitcherToast === 'function') {{
-                    window.__showSwitcherToast({toast_msg});
-                }}
-                if (typeof window.__onOAuthUrlReady === 'function') {{
-                    window.__onOAuthUrlReady({safe_url});
-                }}
-            }})()"""
-            asyncio.run_coroutine_threadsafe(
-                _active_cdp_ws.send(json.dumps({
-                    "id": int(time.time() * 1000) % 1000000,
-                    "method": "Runtime.evaluate",
-                    "params": {"expression": js_code}
-                })),
-                _active_cdp_loop
-            )
+        safe_url = json.dumps(u)
+        toast_msg = json.dumps(f'مرورگر باز شد. اگر باز نشد، <a href="{u}" target="_blank" style="color:#93c5fd;text-decoration:underline;font-weight:700;">اینجا کلیک کنید</a>', ensure_ascii=False)
+        js_code = f"""(() => {{
+            try {{ window.open({safe_url}, '_blank'); }} catch(e) {{}}
+            if (typeof window.__showSwitcherToast === 'function') {{
+                window.__showSwitcherToast({toast_msg});
+            }}
+            if (typeof window.__onOAuthUrlReady === 'function') {{
+                window.__onOAuthUrlReady({safe_url});
+            }}
+        }})()"""
+        _eval_all_instances(js_code)
 
     def _done(res):
         log(f"[OAUTH] Flow completed: {res}")
         with _oauth_lock:
             _active_oauth['running'] = False
-        if _active_cdp_ws and _active_cdp_loop:
-            success = res.get('success', False)
-            email = res.get('email', '')
-            msg = f"حساب {email} با موفقیت افزوده شد!" if success else (res.get('error') or "انصراف یا خطا در ورود گوگل")
-            asyncio.run_coroutine_threadsafe(
-                cdp_broadcast_state(_active_cdp_ws, {
-                    "msg": msg,
-                    "isErr": not success
-                }),
-                _active_cdp_loop
-            )
+        success = res.get('success', False)
+        email = res.get('email', '')
+        will_switch = bool(success and auto_switch and email)
+        msg = (f"حساب {email} با موفقیت افزوده شد!" + (" در حال سوئیچ و ری‌استارت..." if will_switch else "")) if success \
+            else (res.get('error') or "انصراف یا خطا در ورود گوگل")
+        broadcast_all_instances({"msg": msg, "isErr": not success})
+        if will_switch:
+            try:
+                import server as srv_mod
+                sw = srv_mod.switch_account(email, no_restart=True)
+                if sw.get('success'):
+                    _restart_switched_account(srv_mod)
+                else:
+                    log(f"[OAUTH] Auto-switch to {email} failed: {sw.get('error')}")
+                    broadcast_all_instances({"msg": sw.get('error') or "سوئیچ خودکار به حساب جدید انجام نشد", "isErr": True})
+            except Exception as error:
+                log(f"[OAUTH] Auto-switch error: {error!r}")
 
     def _run():
         import server as srv_mod
@@ -1085,7 +1101,7 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
                 resp = {'success': ok, 'settings': res}
             elif self.path == '/api/oauth_signin':
                 tgt_acc = data.get('accountKey') or data.get('email')
-                auth_url = start_shared_oauth_flow(target_account=tgt_acc)
+                auth_url = start_shared_oauth_flow(target_account=tgt_acc, auto_switch=not data.get('noRestart', False))
                 resp = {'success': True, 'auth_url': auth_url}
             elif self.path == '/api/migrate':
                 import migration_engine as m_eng
@@ -1400,7 +1416,7 @@ async def cdp_handle_action(ws, action, data, instance_id="instance_1", default_
             })
         elif action == "oauth_signin":
             tgt = data.get("accountKey") or data.get("email")
-            start_shared_oauth_flow(target_account=tgt)
+            start_shared_oauth_flow(target_account=tgt, auto_switch=not data.get("noRestart", False))
         elif action == "migrate":
             conv_ids = data.get("conversationIds", [])
             src = data.get("sourceAccount", "")

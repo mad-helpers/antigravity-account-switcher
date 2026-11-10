@@ -335,6 +335,50 @@ def restart_language_server():
     return restart_antigravity()
 
 
+def _wait_gone(procs, timeout):
+    """psutil.wait_procs raises AccessDenied on restricted-token processes (sidecars); poll pid existence instead."""
+    import psutil
+    deadline = time.time() + timeout
+    alive = list(procs)
+    while alive:
+        alive = [p for p in alive if psutil.pid_exists(p.pid)]
+        if not alive or time.time() >= deadline:
+            break
+        time.sleep(0.2)
+    return alive
+
+
+def _reapply_active_account():
+    """The app rewrites app_storage.json while closing; re-assert the chosen account before relaunch."""
+    try:
+        email = (Path.home() / '.gemini' / 'accounts' / 'active_instance_1.txt').read_text(encoding='utf-8').strip()
+        entry = load_manifest().get(email)
+        token_file = entry.get('token_file') if entry else ''
+        if not email or not token_file or not os.path.exists(token_file):
+            return
+        with open(token_file, 'r', encoding='utf-8') as f:
+            token = f.read().strip()
+        token_email = quota_engine.extract_token_email(token)
+        if token_email and token_email.lower().strip() != email.lower().strip():
+            return
+        live_email = quota_engine.extract_token_email(quota_engine.get_keychain_token())
+        if live_email and live_email.lower().strip() != email.lower().strip():
+            write_token_to_credential_manager(quota_engine.ensure_fresh_token(token, account_email=email, force_refresh=True))
+        appdata = Path(os.getenv('APPDATA', str(Path.home() / 'AppData' / 'Roaming')))
+        storage_path = appdata / 'Antigravity' / 'app_storage.json'
+        data = {}
+        if storage_path.exists():
+            with open(storage_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        for key in ('antigravity:account_email', 'agy.onboarding.lastLoginUsername', 'jetski.onboarding.lastLoginUsername'):
+            data[key] = email
+        with open(storage_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+        print(f'[RESTART] Re-applied active account {email} before relaunch.', flush=True)
+    except Exception as error:
+        print(f'[RESTART] Could not re-apply active account: {error!r}', flush=True)
+
+
 def restart_antigravity(force=False):
     """Gracefully close Antigravity, clean stale port files, and relaunch visibly on the interactive desktop."""
     sys_name = quota_engine.get_current_system()
@@ -353,6 +397,8 @@ def restart_antigravity(force=False):
                         continue
                     p_exe = info.get('exe') or ''
                     args = info.get('cmdline') or []
+                    if any(a.startswith('--import') for a in args):
+                        continue  # sidecar plugin hosts exit with the app and reject wait()
                     if name == 'antigravity.exe' and p_exe and os.path.exists(p_exe) and not exe:
                         exe = p_exe
                     # Skip secondary isolated instances if they specify a different --user-data-dir
@@ -388,14 +434,14 @@ def restart_antigravity(force=False):
                 except Exception:
                     pass
 
-            _, alive = psutil.wait_procs(mains + engines, timeout=4)
+            alive = _wait_gone(mains + engines, 4)
             if alive:
                 for p in alive:
                     try:
                         p.terminate()
                     except Exception:
                         pass
-                _, still_alive = psutil.wait_procs(alive, timeout=4)
+                still_alive = _wait_gone(alive, 4)
                 for p in still_alive:
                     try:
                         p.kill()
@@ -411,6 +457,7 @@ def restart_antigravity(force=False):
                     except Exception:
                         pass
 
+            _reapply_active_account()
             time.sleep(0.5)
 
             # 3. Relaunch visibly on WinSta0\Default
@@ -432,7 +479,7 @@ def restart_antigravity(force=False):
             print(f'[RESTART] Launched {exe} cleanly on interactive desktop.', flush=True)
             return True
         except Exception as error:
-            print(f'[RESTART] Safe restart did not complete: {error}', flush=True)
+            print(f'[RESTART] Safe restart did not complete: {error!r}', flush=True)
             return False
     if sys_name == 'macos':
         result = subprocess.run(['osascript', '-e', 'tell application "Antigravity" to quit'], capture_output=True)
@@ -1471,6 +1518,8 @@ def run_google_oauth_flow(target_account=None, on_url=None, on_complete=None):
                             tok_data = json.loads(resp.read().decode('utf-8'))
                         
                         access_tok = tok_data.get('access_token')
+                        if not access_tok:
+                            raise RuntimeError('Google did not return an access token')
                         refresh_tok = tok_data.get('refresh_token')
                         expires_in = tok_data.get('expires_in', 3600)
                         
@@ -1614,12 +1663,15 @@ def run_google_oauth_flow(target_account=None, on_url=None, on_complete=None):
             pass
 
     httpd = HTTPServer(('127.0.0.1', port), OAuthCallbackHandler)
-    httpd.timeout = 180
-
     open_browser_url(auth_url)
 
-    httpd.handle_request()
+    deadline = time.time() + 180
+    while time.time() < deadline and not (result['success'] or result['error']):
+        httpd.timeout = max(1, min(5, deadline - time.time()))
+        httpd.handle_request()
     httpd.server_close()
+    if not (result['success'] or result['error']):
+        result['error'] = 'Google sign-in timed out'
 
     if on_complete:
         on_complete(result)
