@@ -164,7 +164,7 @@ export async function ensureDaemonRunning(deps = {}) {
           if (await daemonHealthy(fetchImpl)) return { ok: true };
 
           if (existsSync(daemonScript)) {
-            const child = spawn('pythonw.exe', [daemonScript], {
+            const child = spawn('pythonw.exe', [daemonScript, '--recover-stale'], {
               cwd: dirname(daemonScript),
               detached: true,
               stdio: 'ignore',
@@ -172,7 +172,7 @@ export async function ensureDaemonRunning(deps = {}) {
             });
             child.on('error', () => {
               try {
-                const fallback = spawn('python', [daemonScript], {
+                const fallback = spawn('python', [daemonScript, '--recover-stale'], {
                   cwd: dirname(daemonScript),
                   detached: true,
                   stdio: 'ignore',
@@ -185,14 +185,14 @@ export async function ensureDaemonRunning(deps = {}) {
             child.unref();
           }
         } else if (existsSync(daemonScript)) {
-          const child = spawn('python3', [daemonScript], {
+          const child = spawn('python3', [daemonScript, '--recover-stale'], {
             cwd: dirname(daemonScript),
             detached: true,
             stdio: 'ignore',
           });
           child.on('error', () => {
             try {
-              const fallback = spawn('python', [daemonScript], {
+              const fallback = spawn('python', [daemonScript, '--recover-stale'], {
                 cwd: dirname(daemonScript),
                 detached: true,
                 stdio: 'ignore',

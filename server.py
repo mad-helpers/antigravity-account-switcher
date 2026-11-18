@@ -248,16 +248,32 @@ def ensure_daemon_running() -> bool:
                 creationflags=0x08000000,
             )
             if result.returncode == 0:
-                return True
-            print("[SERVICE] Scheduled daemon start failed; no caller-owned fallback.", flush=True)
-            return False
+                time.sleep(0.5)
+                try:
+                    with _LOOPBACK_OPENER.open("http://127.0.0.1:39281/health", timeout=0.9) as resp:
+                        if resp.status == 200:
+                            return True
+                except Exception:
+                    pass
         except Exception:
-            print("[SERVICE] Could not request scheduled daemon start.", flush=True)
+            pass
+        try:
+            py_exe = shutil.which("pythonw.exe") or sys.executable
+            subprocess.Popen(
+                [py_exe, str(daemon_script), "--recover-stale"],
+                cwd=str(bin_dir if bin_dir.exists() else daemon_script.parent),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=0x08000000,
+            )
+            return True
+        except Exception as e:
+            print(f"[WATCHDOG] Failed to spawn Windows sync_daemon: {e}", flush=True)
             return False
 
     try:
         subprocess.Popen(
-            [sys.executable, str(daemon_script)],
+            [sys.executable, str(daemon_script), "--recover-stale"],
             cwd=str(bin_dir if bin_dir.exists() else daemon_script.parent),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -2371,6 +2387,8 @@ def handle_http_post(handler: BaseHTTPRequestHandler, on_switch_cb=None, oauth_f
 
 
 class SwitcherHTTPHandler(SimpleHTTPRequestHandler):
+    timeout = 5.0
+
     def __init__(self, *args, **kwargs):
         self._cors_origin = None
         self._serving_static = False

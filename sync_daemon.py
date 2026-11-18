@@ -411,6 +411,8 @@ def _on_http_switch(resp: dict) -> None:
 
 
 class QuotaHttpHandler(BaseHTTPRequestHandler):
+    timeout = 5.0
+
     def do_OPTIONS(self):
         server.handle_http_options(self)
 
@@ -988,7 +990,7 @@ async def cdp_supervisor_loop() -> None:
         except Exception as e:
             log(f"[CDP SUPERVISOR ERROR] {e!r}")
 
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(2.0 if targets else 8.0)
 
 
 def start_cdp_supervisor() -> None:
@@ -1016,10 +1018,71 @@ def acquire_daemon_lock(path=None):
             import fcntl
 
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            Path(str(path) + ".pid").write_text(str(os.getpid()), encoding="utf-8")
+        except Exception:
+            pass
         return handle
     except OSError:
         handle.close()
         return None
+
+
+def _is_daemon_http_healthy(port: int = 39281) -> bool:
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    for _ in range(2):
+        try:
+            with opener.open(f"http://127.0.0.1:{int(port)}/health", timeout=1.0) as resp:
+                if resp.status == 200:
+                    return True
+        except Exception:
+            pass
+        time.sleep(0.3)
+    return False
+
+
+def _recover_unhealthy_daemon(lock_path=None) -> None:
+    """Terminate a wedged sync_daemon.py process ONLY when its /health endpoint fails."""
+    if _is_daemon_http_healthy():
+        return
+    lp = Path(lock_path) if lock_path is not None else vault.get_platform_paths()["antigravity_dir"] / "quota_daemon.lock"
+    pid_file = Path(str(lp) + ".pid")
+    pids = []
+    try:
+        if pid_file.is_file():
+            raw = pid_file.read_text(encoding="utf-8").strip()
+            if raw.isdigit():
+                pids.append(int(raw))
+    except Exception:
+        pass
+    try:
+        import psutil
+        me = os.getpid()
+        for proc in psutil.process_iter(["pid", "name"]):
+            try:
+                pname = (proc.info.get("name") or "").lower()
+                if "python" not in pname or proc.info["pid"] == me:
+                    continue
+                cmd = " ".join(proc.cmdline() or []).lower()
+                if "sync_daemon.py" in cmd and "--once" not in cmd:
+                    if proc.info["pid"] not in pids:
+                        pids.append(proc.info["pid"])
+            except Exception:
+                continue
+        for pid in pids:
+            if pid == me:
+                continue
+            try:
+                p = psutil.Process(pid)
+                cmd = " ".join(p.cmdline() or []).lower()
+                if "sync_daemon.py" in cmd and (time.time() - p.create_time()) > 8.0:
+                    log(f"[RECOVER] Stopping unhealthy sync_daemon.py PID={pid}")
+                    p.kill()
+                    p.wait(timeout=2.0)
+            except Exception:
+                pass
+    except ImportError:
+        pass
 
 
 def refresh_all_accounts_tokens() -> None:
@@ -1100,7 +1163,7 @@ def start_optional_theme_service(config_path=None) -> None:
                 ccd = _load_chatgpt_cdp_daemon()
                 if ccd is None:
                     return
-                asyncio.run(ccd.daemon_loop(ports=[9223, 9224], poll_interval=1.0))
+                asyncio.run(ccd.daemon_loop(ports=[9223, 9224], poll_interval=6.0))
             except Exception:
                 log("[THEME] Passive Codex theme connection failed; retrying.")
                 time.sleep(3)
@@ -1111,6 +1174,9 @@ def start_optional_theme_service(config_path=None) -> None:
 
 def daemon_loop() -> None:
     owner_lock = acquire_daemon_lock()
+    if owner_lock is None and "--recover-stale" in sys.argv:
+        _recover_unhealthy_daemon()
+        owner_lock = acquire_daemon_lock()
     if owner_lock is None:
         log("[INFO] Existing service owns this store; leaving it running.")
         return

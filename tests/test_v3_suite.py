@@ -452,6 +452,49 @@ def test_sidecar_mcp_cli_and_ui_contracts():
         assert "Doctor Diagnostics" in buf_txt.getvalue()
 
 
+def test_daemon_low_cpu_cdp_filter_and_recovery_guards():
+    import sync_daemon
+    assert sync_daemon.QuotaHttpHandler.timeout == 5.0
+    assert server.SwitcherHTTPHandler.timeout == 5.0
+
+    class FakeProc:
+        def __init__(self, pid, name, cmdline):
+            self.info = {"pid": pid, "name": name}
+            self._cmdline = cmdline
+            self.called_net = False
+
+        def cmdline(self):
+            return self._cmdline
+
+        def net_connections(self, kind="tcp"):
+            self.called_net = True
+            return []
+
+    no_cdp_proc = FakeProc(101, "Antigravity.exe", ["C:\\Program Files\\Antigravity\\Antigravity.exe"])
+    child_proc = FakeProc(102, "Antigravity.exe", ["Antigravity.exe", "--type=renderer", "--remote-debugging-port=0"])
+    other_proc = FakeProc(103, "explorer.exe", ["explorer.exe"])
+    fake_psutil = type("FakePsutil", (), {"process_iter": staticmethod(lambda attrs=None: [no_cdp_proc, child_proc, other_proc])})
+    with mock.patch.dict(sys.modules, {"psutil": fake_psutil}):
+        assert cdp.discover_live_cdp_ports() == {}
+    assert no_cdp_proc.called_net is False, "must skip net_connections when --remote-debugging-port is absent"
+    assert child_proc.called_net is False
+
+    # Stale unchanged DevToolsActivePort must not be re-probed within TTL unless mtime changes
+    cdp.invalidate_devtools_cache()
+    with tempfile.TemporaryDirectory() as tmp:
+        pf = Path(tmp) / "DevToolsActivePort"
+        pf.write_text("59998\n/devtools/browser\n", encoding="utf-8")
+        with mock.patch.object(cdp, "is_valid_cdp_port", return_value=False) as m_probe:
+            assert cdp._read_valid_port_file(pf) is None
+            assert cdp._read_valid_port_file(pf) is None
+            assert m_probe.call_count == 1
+    cdp.invalidate_devtools_cache()
+
+    # Recover helper must do nothing when daemon /health reports 200 OK
+    with mock.patch.object(sync_daemon, "_is_daemon_http_healthy", return_value=True):
+        sync_daemon._recover_unhealthy_daemon()
+
+
 if __name__ == "__main__":
     test_install_ps1_pure_ascii_no_bom_and_wrapped()
     test_main_branch_urls_and_file_parities()
@@ -459,4 +502,5 @@ if __name__ == "__main__":
     test_ag_suite_cdp_and_quota_6_pools()
     test_rce_custom_command_blocked_and_http_firewall()
     test_sidecar_mcp_cli_and_ui_contracts()
+    test_daemon_low_cpu_cdp_filter_and_recovery_guards()
     print("ALL V3 SUITE TESTS PASSED!")

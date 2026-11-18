@@ -18,6 +18,8 @@ _LOOPBACK_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 _DEVTOOLS_CACHE_LOCK = threading.Lock()
 _DEVTOOLS_TARGETS_CACHE = {"data": None, "time": 0.0}
 _DEVTOOLS_CACHE_TTL = 5.0
+_STALE_PORTFILE_CACHE: dict[str, tuple[int, float]] = {}
+_STALE_PORTFILE_TTL = 30.0
 
 _WS_PAGE_RE = re.compile(r"^wss?://(127\.0\.0\.1|localhost):\d+/devtools/page/", re.I)
 _LOOPBACK_HTTPS_RE = re.compile(r"^https://(?:127\.0\.0\.1|localhost):(\d+)(/.*)?$", re.I)
@@ -119,13 +121,18 @@ def discover_live_cdp_ports() -> dict[str, int]:
     except ImportError:
         return found
 
-    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
+    for proc in psutil.process_iter(["pid", "name"]):
         try:
             name = (proc.info.get("name") or "").lower()
             if "antigravity" not in name:
                 continue
-            cmd = proc.info.get("cmdline") or []
+            cmd = proc.info.get("cmdline")
+            if cmd is None and hasattr(proc, "cmdline"):
+                cmd = proc.cmdline()
+            cmd = cmd or []
             if any(str(a).startswith(("--type=", "--import")) for a in cmd):
+                continue
+            if cmd and not any("--remote-debugging-port" in str(a) for a in cmd):
                 continue
 
             inst_id = "instance_1"
@@ -177,11 +184,20 @@ def _read_valid_port_file(port_file: Path) -> int | None:
     if not port_file.is_file():
         return None
     try:
+        key = str(port_file)
+        st = port_file.stat()
+        mtime_ns = getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))
+        cached = _STALE_PORTFILE_CACHE.get(key)
+        now = time.time()
+        if cached and cached[0] == mtime_ns and (now - cached[1]) < _STALE_PORTFILE_TTL:
+            return None
         lines = port_file.read_text(encoding="utf-8", errors="ignore").strip().splitlines()
         if lines and lines[0].strip().isdigit():
             val = int(lines[0].strip())
             if is_valid_cdp_port(val, require_workbench=True, timeout=0.15):
+                _STALE_PORTFILE_CACHE.pop(key, None)
                 return val
+        _STALE_PORTFILE_CACHE[key] = (mtime_ns, now)
     except Exception:
         pass
     return None
@@ -192,6 +208,7 @@ def invalidate_devtools_cache() -> None:
     with _DEVTOOLS_CACHE_LOCK:
         _DEVTOOLS_TARGETS_CACHE["data"] = None
         _DEVTOOLS_TARGETS_CACHE["time"] = 0.0
+        _STALE_PORTFILE_CACHE.clear()
 
 
 def get_devtools_targets(account_resolver=None, use_cache: bool = True) -> list[dict]:

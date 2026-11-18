@@ -368,7 +368,7 @@ WshShell.Run "schtasks.exe /Run /TN AntigravityQuotaMonitor", 0, False
 
         $taskRegistered = $false
         try {
-            $trArg = "`"$pythonwPath`" `"$daemonPyPath`""
+            $trArg = "`"$pythonwPath`" `"$daemonPyPath`" --recover-stale"
             & schtasks.exe /Create /TN "AntigravityQuotaMonitor" /TR $trArg /SC ONLOGON /F 2>$null | Out-Null
             if ($LASTEXITCODE -eq 0) {
                 $taskRegistered = $true
@@ -378,7 +378,7 @@ WshShell.Run "schtasks.exe /Run /TN AntigravityQuotaMonitor", 0, False
 
         if (-not $taskRegistered) {
             try {
-                $action = New-ScheduledTaskAction -Execute $pythonwPath -Argument "`"$daemonPyPath`"" -WorkingDirectory $TargetBin
+                $action = New-ScheduledTaskAction -Execute $pythonwPath -Argument "`"$daemonPyPath`" --recover-stale" -WorkingDirectory $TargetBin
                 $trigger = New-ScheduledTaskTrigger -AtLogOn
                 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit ([TimeSpan]::Zero)
                 Register-ScheduledTask -TaskName "AntigravityQuotaMonitor" -Action $action -Trigger $trigger -Settings $settings -Force -ErrorAction Stop | Out-Null
@@ -388,7 +388,7 @@ WshShell.Run "schtasks.exe /Run /TN AntigravityQuotaMonitor", 0, False
                 $fallbackAutostart = @"
 Set WshShell = CreateObject("WScript.Shell")
 WshShell.CurrentDirectory = "$TargetBin"
-WshShell.Run Chr(34) & "$pythonwPath" & Chr(34) & " " & Chr(34) & "$daemonPyPath" & Chr(34), 0, False
+WshShell.Run Chr(34) & "$pythonwPath" & Chr(34) & " " & Chr(34) & "$daemonPyPath" & Chr(34) & " --recover-stale", 0, False
 "@
                 try {
                     Set-Content -Path $autostartVbsPath -Value $fallbackAutostart -Encoding ASCII
@@ -418,7 +418,7 @@ WshShell.Run Chr(34) & "$pythonwPath" & Chr(34) & " " & Chr(34) & "$daemonPyPath
             if (-not $started) {
                 try {
                     $wsh.CurrentDirectory = $TargetBin
-                    $wsh.Run("`"$pythonwPath`" `"$daemonPyPath`"", 0, $false) | Out-Null
+                    $wsh.Run("`"$pythonwPath`" `"$daemonPyPath`" --recover-stale", 0, $false) | Out-Null
                 } catch {}
             }
 
