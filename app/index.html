@@ -3,12 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Antigravity Switcher & Migration Suite</title>
+  <title>Antigravity Control Center</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-  <!-- Ambient Liquid Glows -->
   <div class="ambient-glow ambient-1"></div>
   <div class="ambient-glow ambient-2"></div>
 
@@ -17,41 +16,53 @@
     <!-- Header -->
     <header class="app-header">
       <div class="brand-capsule">
-        <div class="logo-orb">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <div class="logo-orb" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
           </svg>
         </div>
         <div class="brand-text">
           <h1 data-i18n="appName">Antigravity Switcher</h1>
-          <p data-i18n="appSubtitle">Multi-Account & Project Migration Suite</p>
+          <p data-i18n="appSubtitle">Multi-Account &amp; Project Migration Suite</p>
         </div>
       </div>
 
       <div class="header-actions">
-        <!-- Language Selector -->
+        <button type="button" id="langQuickToggle" class="btn btn-glass lang-quick-btn" onclick="toggleQuickFaEn()" title="Toggle FA / EN">
+          فا
+        </button>
         <div class="lang-select-wrap">
-          <select id="langSelect" class="lang-select" onchange="changeLanguage(this.value)">
-            <option value="en" selected>🇺🇸 English</option>
-            <option value="fa">🇮🇷 فارسی</option>
-            <option value="es">🇪🇸 Español</option>
+          <select id="langSelect" class="lang-select" onchange="changeLanguage(this.value)" aria-label="Language">
+            <option value="en">EN</option>
+            <option value="fa">فارسی</option>
+            <option value="zh">中文</option>
+            <option value="es">ES</option>
           </select>
-          <span class="lang-chevron">▾</span>
+          <span class="lang-chevron" aria-hidden="true">▾</span>
         </div>
-
-        <button class="btn btn-glass" onclick="logoutAndAddNew()" style="padding: 7px 12px; font-size: 12px;">
+        <button type="button" id="restartIdeHeaderBtn" class="btn btn-glass" onclick="restartAntigravityFromApp()">
+          <span>🔄</span>
+          <span data-i18n="restartIde">Restart IDE</span>
+        </button>
+        <button type="button" class="btn btn-glass" onclick="toggleAddAccountDrawer()">
           <span>➕</span>
           <span data-i18n="addNewAccount">Add Account</span>
         </button>
       </div>
     </header>
 
-    <!-- Hero: Active Account Card -->
+    <!-- Live CDP HUD & Smart RTL Connection Banner -->
+    <div id="cdpStatusBanner" class="status-banner" style="display:none;"></div>
+
+    <!-- Session Mismatch Alert Banner -->
+    <div id="sessionMismatchBanner" class="status-banner danger" style="display:none;"></div>
+
+    <!-- Hero: Active Account & 6 Model Pools -->
     <section class="liquid-card active-card">
       <div class="active-card-top">
         <div class="user-profile">
           <div class="avatar-frame">
-            <img id="userAvatar" class="avatar-img" src="" alt="Avatar" style="display:none;" />
+            <img id="userAvatar" class="avatar-img" src="" alt="Account Avatar" style="display:none;" />
             <div id="userAvatarPlaceholder" class="avatar-placeholder">A</div>
             <div class="pulse-dot" title="Active Session"></div>
           </div>
@@ -60,45 +71,51 @@
               <span id="userName">Active Session</span>
               <span id="tierBadge" class="tier-badge pro">PRO</span>
             </h2>
-            <p id="userEmail">Loading session...</p>
+            <p id="userEmail" class="ltr">Loading session...</p>
           </div>
         </div>
       </div>
 
-      <!-- Live Quota Gauge -->
       <div class="quota-box">
         <div class="quota-box-header">
           <span class="quota-title">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
               <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
             </svg>
-            <span data-i18n="activeAccount">Active Quota</span>
+            <span data-i18n="session5h">5-Hour Session Quota</span>
           </span>
-          <span id="quotaCountdown" class="quota-countdown">⏱ Resets in --</span>
+          <span id="quotaCountdown" class="quota-countdown mono">⏱ --</span>
         </div>
 
         <div class="liquid-progress-track">
           <div id="quotaProgressFill" class="liquid-progress-fill" style="width: 0%;"></div>
         </div>
 
-        <div class="quota-box-footer">
+        <div class="quota-box-footer mono">
           <span id="quotaUsedText">0% used</span>
           <span id="quotaRemainingText">100% remaining</span>
         </div>
+
+        <div class="weekly-summary-row">
+          <span data-i18n="weeklyQuota">Weekly Rolling Quota</span>
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span id="weeklySummaryText" class="mono">100% remaining</span>
+            <div class="weekly-bar-track">
+              <div id="weeklyProgressFill" class="weekly-bar-fill" style="width: 100%;"></div>
+            </div>
+          </div>
+        </div>
       </div>
 
-      <!-- Models Breakdown -->
-      <div class="models-grid" id="modelsGrid">
-        <!-- Injected via JavaScript -->
-      </div>
+      <div class="models-section-label" data-i18n="modelQuotas">6 Model Pools Breakdown</div>
+      <div class="models-grid" id="modelsGrid"></div>
 
-      <!-- Hero Actions -->
       <div class="btn-group-hero">
-        <button class="btn btn-primary" onclick="saveCurrentAccount()" style="flex:1;">
+        <button type="button" class="btn btn-primary" onclick="saveCurrentAccount()" style="flex:1;">
           <span>💾</span>
-          <span data-i18n="saveCurrent">Save Current Account</span>
+          <span data-i18n="saveCurrent">Save Current</span>
         </button>
-        <button class="btn btn-glass" onclick="refreshLiveData()">
+        <button type="button" class="btn btn-glass" onclick="refreshLiveData()">
           <span>🔄</span>
           <span data-i18n="refreshQuota">Refresh</span>
         </button>
@@ -106,156 +123,158 @@
     </section>
 
     <!-- Dual-Instance Concurrent Suite Card -->
-    <section class="liquid-card" style="margin-top: 18px; border: 1px solid rgba(59,130,246,0.3); background: rgba(59,130,246,0.04);">
-      <div style="display:flex; align-items:center; justify-content:space-between;">
-        <div style="display:flex; align-items:center; gap:10px;">
-          <div style="width:36px; height:36px; border-radius:10px; background:rgba(59,130,246,0.15); border:1px solid rgba(59,130,246,0.3); display:flex; align-items:center; justify-content:center; font-size:18px;">
-            ⚡️
-          </div>
-          <div>
-            <h3 data-i18n="dualInstanceTitle" style="font-size:14.5px; font-weight:700; margin:0; color:#93c5fd;">Dual Concurrent Antigravity Instances</h3>
-            <p data-i18n="dualInstanceDesc" style="font-size:11.5px; color:var(--text-muted); margin-top:2px; line-height:1.4;">
-              Work simultaneously on your projects with two different Google accounts side-by-side without logging out.
-            </p>
-          </div>
-        </div>
+    <section class="liquid-card dual-card">
+      <div>
+        <h3 data-i18n="dualInstanceTitle" style="font-size:14.5px; font-weight:700; color:var(--accent-blue);">Dual Concurrent Antigravity Instances</h3>
+        <p data-i18n="dualInstanceDesc" style="font-size:12px; color:var(--text-muted); margin-top:4px; line-height:1.5;">
+          Work simultaneously on projects with two independent Google accounts side-by-side without logging out.
+        </p>
       </div>
 
-      <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; margin-top:14px; padding-top:12px; border-top:1px solid rgba(255,255,255,0.06);">
-        <div style="flex:1; min-width:220px;">
-          <label data-i18n="selectSecondaryAccount" style="font-size:11.5px; font-weight:600; color:var(--text-muted); display:block; margin-bottom:5px;">Select Account for 2nd Window:</label>
-          <select id="dualTargetAccountSelect" class="lang-select" style="width:100%; border-radius:var(--radius-sm); padding:8px 12px; font-size:12.5px;">
-            <!-- Populated from savedAccounts -->
-          </select>
+      <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; margin-top:14px; padding-top:12px; border-top:1px solid var(--glass-border);">
+        <div style="flex:1; min-width:210px;">
+          <label for="dualTargetAccountSelect" data-i18n="selectSecondaryAccount" style="font-size:11.5px; font-weight:600; color:var(--text-muted); display:block; margin-bottom:5px;">Select Account for 2nd Window:</label>
+          <select id="dualTargetAccountSelect" class="lang-select" style="width:100%; border-radius:var(--radius-sm); padding:8px 12px; font-size:12.5px;"></select>
         </div>
 
-        <div style="display:flex; gap:8px;">
-          <button class="btn btn-primary" id="launchDualBtn" onclick="executeLaunchDual()" style="padding: 7px 14px; font-size: 12.5px;">
-            <span data-i18n="launchDualBtn">🚀 Launch Secondary Instance</span>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="button" class="btn btn-primary" id="launchDualBtn" onclick="executeLaunchDual()">
+            <span>🚀</span>
+            <span data-i18n="launchDualBtn">Launch 2nd Window</span>
           </button>
-          <button class="btn btn-glass" onclick="openMigrationModal()" style="padding: 7px 12px; font-size: 12.5px; border-color:rgba(147,197,253,0.3);" title="Project & Chat Migration">
-            <span data-i18n="openMigrationHubBtn">⇄ Project Migration Hub</span>
+          <button type="button" class="btn btn-glass" onclick="openMigrationModal()">
+            <span>⇄</span>
+            <span data-i18n="openMigrationHubBtn">Projects &amp; Migration Hub</span>
           </button>
         </div>
       </div>
     </section>
 
-    <!-- Saved Accounts Section -->
+    <!-- Saved Accounts & Add Account Drawer -->
     <section>
       <div class="section-head">
         <h3 data-i18n="savedAccounts">Saved Accounts</h3>
-        <span id="accountsCountBadge" class="tier-badge free">0</span>
+        <span id="accountsCountBadge" class="tier-badge free mono">0</span>
       </div>
 
-      <div class="accounts-list" id="savedAccountsList">
-        <!-- Dynamically injected account cards -->
+      <div id="addAccountDrawer" class="add-account-drawer">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap;">
+          <span style="font-size:13px; font-weight:700; color:var(--accent-cyan);" data-i18n="addNewAccount">Add Account</span>
+          <button type="button" class="btn btn-glass" style="min-height:28px; padding:4px 10px; font-size:11px;" onclick="toggleAddAccountDrawer(false)" data-i18n="close">Close</button>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button type="button" class="btn btn-primary" onclick="startOAuthSignIn()">
+            <span>🔑</span>
+            <span data-i18n="signInGoogle">Sign In with Google</span>
+          </button>
+          <button type="button" class="btn btn-glass" onclick="toggleTokenInputBox()">
+            <span>📋</span>
+            <span data-i18n="importToken">Direct Token Import</span>
+          </button>
+        </div>
+        <div id="oauthDirectLinkBox" style="display:none; padding:10px; border-radius:var(--radius-sm); background:rgba(56,189,248,0.1); border:1px solid var(--tier-pro-border); font-size:12px;"></div>
+        <div id="manualTokenBox" style="display:none; flex-direction:column; gap:8px;">
+          <textarea id="manualTokenInput" class="token-textarea" dir="ltr" placeholder="Paste token or JSON payload here..."></textarea>
+          <div style="display:flex; justify-content:flex-end;">
+            <button type="button" class="btn btn-primary" onclick="submitManualToken()" data-i18n="saveTokenBtn">Save Token</button>
+          </div>
+        </div>
       </div>
+
+      <div class="accounts-list" id="savedAccountsList"></div>
     </section>
 
     <!-- Footer -->
     <footer class="app-footer">
       <div>
         <span data-i18n="author">Developed with precision by</span>
-        <a href="https://github.com/Bombhub-apk" target="_blank">Madgod-xyz</a>
+        <a href="https://github.com/mad-helpers" target="_blank" rel="noreferrer">mad-helpers (Madgod-xyz &amp; Bombhub-apk)</a>
       </div>
-      <a href="https://github.com/Bombhub-apk/antigravity-account-switcher" target="_blank" data-i18n="githubNotice" style="font-size:11px; opacity:0.75;">
-        ★ Star on GitHub
+      <a href="https://github.com/mad-helpers/antigravity-account-switcher" target="_blank" rel="noreferrer" data-i18n="githubNotice" style="font-size:11px;">
+        Open GitHub Repository
       </a>
     </footer>
 
   </div>
 
-  <!-- Project & Chat Migration Modal (iOS Liquid Sheet) -->
+  <!-- Project & Chat Migration Modal -->
   <div class="modal-overlay" id="migrationModal">
     <div class="modal-sheet">
       <div class="modal-header">
         <div>
-          <h2 data-i18n="migrateTitle">Project & Chat Migration Hub</h2>
+          <h2 data-i18n="migrateTitle">Project &amp; Chat Migration Hub</h2>
           <p data-i18n="migrateSubtitle" style="font-size:12px; color:var(--text-muted); margin-top:2px;">
-            Transfer or clone agent conversations and brainstorm artifacts between accounts
+            Transfer or clone agent conversations and workspace access between accounts
           </p>
         </div>
-        <button class="modal-close-btn" onclick="closeMigrationModal()">✕</button>
+        <button type="button" class="modal-close-btn" onclick="closeMigrationModal()" aria-label="Close">✕</button>
       </div>
 
       <div class="modal-body">
-
-        <!-- Navigation Tabs -->
         <div class="modal-tab-bar">
-          <button class="modal-tab-btn active" id="modalTabProjectsBtn" onclick="switchModalTab('projects')">
-            <span data-i18n="tabProjects">📁 Projects & Workspaces</span>
+          <button type="button" class="modal-tab-btn active" id="modalTabProjectsBtn" onclick="switchModalTab('projects')">
+            <span>📁</span>
+            <span data-i18n="tabProjects">Projects &amp; Quota</span>
           </button>
-          <button class="modal-tab-btn" id="modalTabTasksBtn" onclick="switchModalTab('tasks')">
-            <span data-i18n="tabTasks">⏱ Scheduled Tasks & Isolation</span>
+          <button type="button" class="modal-tab-btn" id="modalTabTasksBtn" onclick="switchModalTab('tasks')">
+            <span>⏱</span>
+            <span data-i18n="tabTasks">Scheduled Tasks</span>
           </button>
-          <button class="modal-tab-btn" id="modalTabConversationsBtn" onclick="switchModalTab('conversations')">
-            <span data-i18n="tabConversations">💬 Conversations & Migration</span>
+          <button type="button" class="modal-tab-btn" id="modalTabConversationsBtn" onclick="switchModalTab('conversations')">
+            <span>💬</span>
+            <span data-i18n="tabConversations">Conversations &amp; Migration</span>
           </button>
         </div>
 
-        <!-- PANE 1: PROJECTS & WORKSPACES SELECTIVE SYNC -->
         <div id="paneProjects" class="modal-tab-pane" style="display:flex; flex-direction:column; gap:12px;">
-          <p data-i18n="projectsDesc" style="font-size:12px; color:var(--text-muted); line-height:1.5; margin:0;">
-            Selectively enable or isolate specific projects in Instance 2 without bleeding unselected code or folders.
+          <p data-i18n="projectsDesc" style="font-size:12px; color:var(--text-muted); line-height:1.5;">
+            Configure Instance 2 project visibility and select which account pays quota per project.
           </p>
           <input type="text" id="projectSearchInput" class="lang-select" style="width:100%; border-radius:var(--radius-sm); padding:8px 12px;" placeholder="Search projects or paths..." oninput="filterProjects(this.value)" />
-          <div class="project-card-list" id="projectCardList">
-            <!-- Dynamically populated project cards -->
-          </div>
+          <div class="project-card-list" id="projectCardList"></div>
         </div>
 
-        <!-- PANE 2: SCHEDULED TASKS ISOLATION -->
         <div id="paneTasks" class="modal-tab-pane" style="display:none; flex-direction:column; gap:12px;">
-          <p data-i18n="tasksDesc" style="font-size:12px; color:var(--text-muted); line-height:1.5; margin:0;">
-            Scheduled tasks and cron jobs in Account 1 are strictly isolated and will never trigger or execute in Account 2.
+          <p data-i18n="tasksDesc" style="font-size:12px; color:var(--text-muted); line-height:1.5;">
+            Scheduled tasks in Account 1 are strictly isolated and will not trigger in Account 2.
           </p>
-          <div class="task-card-list" id="taskCardList">
-            <!-- Dynamically populated task cards -->
-          </div>
+          <div class="task-card-list" id="taskCardList"></div>
         </div>
 
-        <!-- PANE 3: CONVERSATIONS & TIMELINES MIGRATION -->
         <div id="paneConversations" class="modal-tab-pane" style="display:none; flex-direction:column; gap:12px;">
-
-          <!-- Target Account Selection -->
           <div style="display:flex; flex-direction:column; gap:6px;">
-            <label data-i18n="targetAccount" style="font-size:13px; font-weight:700;">Target Account</label>
-            <select id="modalTargetAccountSelect" class="lang-select" style="width:100%; border-radius:var(--radius-md); padding:10px 14px;">
-              <!-- Populated dynamically -->
-            </select>
+            <label for="modalTargetAccountSelect" data-i18n="targetAccount" style="font-size:13px; font-weight:700;">Target Account</label>
+            <select id="modalTargetAccountSelect" class="lang-select" style="width:100%; border-radius:var(--radius-md); padding:9px 14px;"></select>
           </div>
 
-          <!-- Transfer Mode -->
           <div style="display:flex; flex-direction:column; gap:8px;">
-            <label data-i18n="migrationMode" style="font-size:13px; font-weight:700;">Transfer Mode</label>
+            <span data-i18n="migrationMode" style="font-size:13px; font-weight:700;">Transfer Mode</span>
             <div class="option-row">
-              <div class="radio-card selected" id="modeCopyCard" onclick="selectMigrationMode('copy')">
+              <div class="radio-card selected" id="modeCopyCard" onclick="selectMigrationMode('copy')" role="button" tabindex="0">
                 <span class="radio-card-title" data-i18n="modeCopy">Safe Copy (Keep in both)</span>
-                <span class="radio-card-desc" data-i18n="modeCopyDesc">Duplicates conversations and artifacts so you can continue work with new quota.</span>
+                <span class="radio-card-desc" data-i18n="modeCopyDesc">Duplicates conversations and artifacts without touching original data.</span>
               </div>
-              <div class="radio-card" id="modeCutCard" onclick="selectMigrationMode('move')">
-                <span class="radio-card-title" data-i18n="modeCut">Cut & Move (Transfer)</span>
+              <div class="radio-card" id="modeCutCard" onclick="selectMigrationMode('move')" role="button" tabindex="0">
+                <span class="radio-card-title" data-i18n="modeCut">Cut &amp; Move (Transfer)</span>
                 <span class="radio-card-desc" data-i18n="modeCutDesc">Moves projects completely to target account, cleaning up source.</span>
               </div>
             </div>
           </div>
 
-          <!-- Destination Structure -->
           <div style="display:flex; flex-direction:column; gap:8px;">
-            <label data-i18n="structureMode" style="font-size:13px; font-weight:700;">Destination Layout</label>
+            <span data-i18n="structureMode" style="font-size:13px; font-weight:700;">Destination Layout</span>
             <div class="option-row">
-              <div class="radio-card selected" id="structSeparateCard" onclick="selectStructureMode('separate')">
-                <span class="radio-card-title" data-i18n="structSeparate">Separate Pages & Projects</span>
+              <div class="radio-card selected" id="structSeparateCard" onclick="selectStructureMode('separate')" role="button" tabindex="0">
+                <span class="radio-card-title" data-i18n="structSeparate">Separate Pages &amp; Projects</span>
                 <span class="radio-card-desc" data-i18n="structSeparateDesc">Keeps each conversation thread as an independent project.</span>
               </div>
-              <div class="radio-card" id="structMergeCard" onclick="selectStructureMode('merge')">
+              <div class="radio-card" id="structMergeCard" onclick="selectStructureMode('merge')" role="button" tabindex="0">
                 <span class="radio-card-title" data-i18n="structMerge">Merge into Single Project</span>
                 <span class="radio-card-desc" data-i18n="structMergeDesc">Consolidates all selected conversations into a single timeline.</span>
               </div>
             </div>
           </div>
 
-          <!-- Continuous Dual-Sync Toggle -->
           <div class="sync-toggle-card">
             <div style="display:flex; flex-direction:column; gap:3px;">
               <span class="radio-card-title" data-i18n="dualSyncTitle">Continuous Dual-Sync</span>
@@ -267,37 +286,30 @@
             </label>
           </div>
 
-          <!-- Filter By Project -->
           <div style="display:flex; flex-direction:column; gap:6px;">
-            <label data-i18n="filterByProject" style="font-size:12px; font-weight:600; color:var(--text-muted);">Filter by Project:</label>
+            <label for="convProjectFilterSelect" data-i18n="filterByProject" style="font-size:12px; font-weight:600; color:var(--text-muted);">Filter by Project:</label>
             <select id="convProjectFilterSelect" class="lang-select" style="width:100%; border-radius:var(--radius-sm); padding:8px 12px;" onchange="onFilterProjectChange(this.value)">
               <option value="" data-i18n="allProjects">All Projects</option>
             </select>
           </div>
 
-          <!-- Conversation Picker -->
           <div style="display:flex; flex-direction:column; gap:8px;">
             <div style="display:flex; justify-content:space-between; align-items:center;">
               <label data-i18n="selectConversations" style="font-size:13px; font-weight:700;">Select Conversations</label>
               <div style="display:flex; gap:8px;">
-                <button class="btn-glass" onclick="toggleSelectAllConversations(true)" style="padding:4px 8px; font-size:11px;" data-i18n="selectAll">Select All</button>
-                <button class="btn-glass" onclick="toggleSelectAllConversations(false)" style="padding:4px 8px; font-size:11px;" data-i18n="deselectAll">Deselect</button>
+                <button type="button" class="btn btn-glass" onclick="toggleSelectAllConversations(true)" style="min-height:28px; padding:4px 8px; font-size:11px;" data-i18n="selectAll">Select All</button>
+                <button type="button" class="btn btn-glass" onclick="toggleSelectAllConversations(false)" style="min-height:28px; padding:4px 8px; font-size:11px;" data-i18n="deselectAll">Deselect</button>
               </div>
             </div>
-            <input type="text" id="convSearchInput" class="lang-select" style="width:100%; border-radius:var(--radius-sm); padding:8px 12px; margin-bottom:4px;" placeholder="Search conversations..." oninput="filterConversations(this.value)" />
-
-            <div class="conv-picker" id="conversationPickerList">
-              <!-- Populated dynamically with checkboxes -->
-            </div>
+            <input type="text" id="convSearchInput" class="lang-select" style="width:100%; border-radius:var(--radius-sm); padding:8px 12px;" placeholder="Search conversations..." oninput="filterConversations(this.value)" />
+            <div class="conv-picker" id="conversationPickerList"></div>
           </div>
-
         </div>
-
       </div>
 
       <div class="modal-footer">
-        <button class="btn btn-glass" onclick="closeMigrationModal()" data-i18n="close">Close</button>
-        <button class="btn btn-primary" id="startMigrationBtn" onclick="executeMigration()" style="display:none;">
+        <button type="button" class="btn btn-glass" onclick="closeMigrationModal()" data-i18n="close">Close</button>
+        <button type="button" class="btn btn-primary" id="startMigrationBtn" onclick="executeMigration()" style="display:none;">
           <span>🚀</span>
           <span data-i18n="startMigration">Start Smart Migration</span>
         </button>
@@ -305,7 +317,8 @@
     </div>
   </div>
 
-  <!-- Scripts -->
+  <div id="appToast" class="app-toast" role="status" aria-live="polite"></div>
+
   <script src="i18n.js"></script>
   <script src="app.js"></script>
 </body>

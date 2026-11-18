@@ -1,35 +1,35 @@
 ---
 name: antigravity-account-suite
-description: Manage Antigravity accounts, view live model quotas, and assign per-project quota sources from CLI
+description: Manage Antigravity accounts, view live 6-pool model quotas, diagnose suite health, and assign per-project quota sources from CLI or MCP
 ---
 
-# Antigravity Account Suite & Quota Monitor Skill
+# Antigravity Account Suite, 6-Pool Quota & Smart RTL Skill (v3.0.0)
 
-Use this skill when you need to inspect live AI model quotas, switch Google accounts in Google Antigravity, assign per-project quota sources, or orchestrate concurrent Antigravity instances.
+Use this skill when you need to inspect live AI model quotas across all 6 model pools, switch Google accounts in Google Antigravity, assign per-project quota payers, diagnose IDE/CDP telemetry, or open the native Sidecar Aux Pane.
 
-Developed by **[Ethan Carter (Bombhub-apk)](https://github.com/Bombhub-apk)** & **[Madgod-xyz](https://github.com/Madgod-xyz)**.
+Developed by **[mad-helpers](https://github.com/mad-helpers)** (**[Madgod-xyz](https://github.com/Madgod-xyz)** & **[Bombhub-apk](https://github.com/Bombhub-apk)**) • [Repository](https://github.com/mad-helpers/antigravity-account-switcher).
 
 ---
 
 ## 1. Quick CLI Reference
 
-The suite provides global CLI binaries in `%USERPROFILE%\.gemini\bin`:
+The suite provides global CLI binaries in `%USERPROFILE%\.gemini\bin` (Windows) and `~/.local/bin` / `/opt/homebrew/bin` / `/usr/local/bin` (macOS & Linux):
 
 | Command | Action |
 | :--- | :--- |
-| `agy-quota` | Display real-time 5-hour session quota, weekly rolling limits, and per-model breakdown table with progress bars |
-| `agy-quota --status-json` | Output machine-readable JSON status of active account, model pools, saved accounts, and instances |
-| `agy-switch --list` | List all saved accounts, subscription tiers (`Pro`, `Ultra`, `Free`), remaining %, and active status |
-| `agy-switch --switch <email>` | Instantly switch active account in OS Credential Manager / Keychain |
-| `agy-switch --switch <email> --no-restart` | Switch OS credential immediately without restarting the Antigravity editor process |
-| `agy-switch --set-project-quota <proj> <email>` | Designate which Google account pays for language server requests in a specific project |
-| `agy-switch --launch-instance <slot_or_email>` | Launch or focus an isolated concurrent Antigravity window (`instance_2`, `instance_3`, etc.) |
+| `agy-quota` | Display real-time 5-hour session quota, weekly rolling limits, and 6-pool breakdown table with progress bars |
+| `agy-quota --status-json` | Output machine-readable JSON status of active account, 6 model pools, `auth_state`, saved accounts, and instances |
+| `agy-switch --doctor` | Run comprehensive health diagnostics (`LanguageServer` RPC, `session_mismatch`, `--remote-debugging-port=0` CDP HUD, `sync_daemon`, fonts, and saved tokens) |
+| `agy-switch --list` | List all saved accounts, subscription tiers (`Pro`, `Ultra`, `Free`), remaining %, token health, and active status |
+| `agy-switch --switch <email>` | Switch active account in OS Credential Manager / Keychain (in-place `--no-restart` by default; pass `--restart` to relaunch IDE) |
+| `agy-switch --set-project-quota <proj> <email>` | Designate which Google account pays for requests in a project and switch OS credentials immediately (`--no-switch` to skip credential switch) |
+| `agy-switch --launch-instance <slot_or_email>` | Launch or focus an isolated concurrent Antigravity window (`instance_2`, `instance_3`, etc.) with `--remote-debugging-port=0` |
 | `agy-switch --status-json` | Full structured JSON status payload for autonomous agents |
-| `agy-switch` | Launch the iOS Liquid Glass Desktop GUI |
+| `agy-switch --gui` | Launch the iOS Liquid Glass Control Center on `http://127.0.0.1:39285/index.html` |
 
 ---
 
-## 2. Real-Time Quota Inspection
+## 2. Real-Time 6-Pool Quota Inspection
 
 ### Terminal Formatted Table
 ```bash
@@ -38,13 +38,15 @@ agy-quota
 agy-switch --usage
 ```
 Returns:
-- **Account Email & Subscription Plan:** (e.g. `Google AI Pro`, `Ultra`, `Free`)
+- **Account Email, Subscription Plan & Session Mismatch Alert:** (`Google AI Pro`, `Ultra`, `Free`, plus live check comparing running IDE account vs OS Credential Vault)
 - **Active Session Limit (5-Hour Window):** Used percentage, remaining percentage, and countdown timer until reset.
-- **Weekly Rolling Limit (7-Day Aggregate):** Used percentage, remaining percentage, and reset date/time.
-- **Model Pool Breakdown:**
-  - `Gemini 3.8 Flash High`
-  - `Gemini 3.1 Pro`
-  - `Claude Sonnet 4.6`
+- **Weekly Rolling Limit (7-Day Aggregate):** Used percentage, remaining percentage, and reset countdown.
+- **6-Pool Model Quota Breakdown:**
+  - `Gemini 4 Hydrogen`
+  - `Gemini 4 Argon`
+  - `Gemini 4 Carbon & Orchestrator`
+  - `Gemini 3.8 Flash`
+  - `Claude 4.6 (Opus & Sonnet)`
   - `GPT-OSS 120B`
 
 ### Structured JSON for Agents
@@ -55,9 +57,13 @@ Example JSON structure:
 ```json
 {
   "success": true,
+  "version": "3.0.0",
   "active_account": {
     "email": "developer@example.com",
     "tier": "Google AI Pro",
+    "live_ide_email": "developer@example.com",
+    "credential_email": "developer@example.com",
+    "session_mismatch": false,
     "session": {
       "used_pct": 10.8,
       "remaining_pct": 89.2,
@@ -69,15 +75,22 @@ Example JSON structure:
       "resets_in": "4 d 18 hr"
     },
     "pools": [
-      {
-        "name": "Gemini 3.8 Flash High",
-        "used_pct": 10.8,
-        "remaining_pct": 89.2,
-        "resets_in": "4 hr 15 min"
-      }
+      { "name": "Gemini 4 Hydrogen", "used_pct": 10.8, "remaining_pct": 89.2, "resets_in": "4 hr 15 min" },
+      { "name": "Gemini 4 Argon", "used_pct": 10.8, "remaining_pct": 89.2, "resets_in": "4 hr 15 min" },
+      { "name": "Gemini 4 Carbon & Orchestrator", "used_pct": 10.8, "remaining_pct": 89.2, "resets_in": "4 hr 15 min" },
+      { "name": "Gemini 3.8 Flash", "used_pct": 10.8, "remaining_pct": 89.2, "resets_in": "4 hr 15 min" },
+      { "name": "Claude 4.6 (Opus & Sonnet)", "used_pct": 5.0, "remaining_pct": 95.0, "resets_in": "4 hr 40 min" },
+      { "name": "GPT-OSS 120B", "used_pct": 5.0, "remaining_pct": 95.0, "resets_in": "4 hr 40 min" }
     ]
   },
   "current_email": "developer@example.com",
+  "auth_state": {
+    "ls_online": true,
+    "ls_port": 51234,
+    "live_ide_email": "developer@example.com",
+    "credential_email": "developer@example.com",
+    "session_mismatch": false
+  },
   "saved_accounts": { ... },
   "projects": [ ... ],
   "instances": { "instance_2": false, "instance_3": false }
@@ -86,92 +99,53 @@ Example JSON structure:
 
 ---
 
-## 3. Account Switching & Token Management
+## 3. Suite Diagnostics (`--doctor` & `diagnose_suite`)
 
-### Switching Active Account
-When an account exhausts its prompt quota or when working on an account-specific workspace:
+To verify why in-editor HUD, Smart RTL, or account switching is out of sync:
 ```bash
-agy-switch --switch user2@example.com
+agy-switch --doctor
+# or JSON output:
+agy-switch --doctor --json
 ```
-To update the OS Credential Manager without restarting the editor window:
-```bash
-agy-switch --switch user2@example.com --no-restart
-```
-
-### Saving Active Session to Manifest
-```bash
-agy-switch --save
-```
-
-### Logging Out
-```bash
-agy-switch --logout
-```
+Checks:
+- **Language Server Connect-RPC:** Live port discovery & `live_ide_email`.
+- **OS Credential Vault:** Compares `credential_email` vs `live_ide_email` (`session_mismatch`).
+- **CDP Workbench Port:** Verifies `DevToolsActivePort` and `--remote-debugging-port=0` workbench readiness (required on Antigravity 2.33+).
+- **Background Sync Daemon (`127.0.0.1:39281`) & Control Center (`127.0.0.1:39285`):** Health and listener status.
+- **Bundled Local Fonts & Saved Account Tokens:** Verifies `Vazirmatn[wght].woff2`, `Estedad[wght].woff2`, `Outfit[wght].woff2`, and flags accounts with `needs_reauth`.
 
 ---
 
-## 4. Per-Project Quota Allocation
+## 4. Account Switching & Per-Project Quota Allocation
 
-You can bind any project or directory to a designated quota account. Subsequent language server prompts in that project will consume quota from that designated account:
+### Switching Active Account
+```bash
+agy-switch --switch user2@example.com
+# With graceful IDE restart (--remote-debugging-port=0):
+agy-switch --switch user2@example.com --restart
+```
+
+### Per-Project Quota Payer
+Bind any project ID, name, or directory path to a designated quota account (automatically switches the OS credential unless `--no-switch` is passed):
 ```bash
 agy-switch --set-project-quota "/path/to/my-project" user2@example.com
 ```
-Accepts:
-- Exact Project ID (e.g. `38a862ea-ade2-428a-b094-ff969a0e51c1`)
-- Project folder name (e.g. `my-project`)
-- Absolute or relative directory path
 
 ---
 
-## 5. Model Context Protocol (MCP) Server Integration
+## 5. Model Context Protocol (MCP) Server & Sidecar Aux Pane
 
-The suite includes a zero-dependency stdio MCP server located at:
-`%USERPROFILE%\.gemini\antigravity\bin\mcp_server.py`
+The suite ships a native Antigravity 2.33+ plugin (`~/.gemini/config/plugins/antigravity-account-suite/`) with a zero-dependency stdio MCP server (`~/.gemini/antigravity/bin/mcp_server.py`) and an interactive Sidecar Aux Pane:
+- **Aux Pane Link:** `[Account & Quota Hub](sidecar://antigravity-account-suite/account-suite/)`
 
-### MCP Tools:
+### 5 Registered MCP Tools:
 1. `get_quota_status(account?: string, include_all?: boolean)`:
-   Fetches live model limits, session reset countdowns, and weekly usage.
+   Returns 5-hour & weekly quota, all 6 model pools, `auth_state`, and sanitized `saved_accounts`.
 2. `switch_account(account: string, no_restart?: boolean)`:
-   Switches the OS Credential Manager token and active quota cache.
-3. `set_project_quota(project: string, account: string)`:
-   Configures project-level quota payer.
+   Switches the OS Credential Manager / Keychain token (`no_restart=true` default).
+3. `set_project_quota(project: string, account: string, apply_now?: boolean)`:
+   Configures project-level quota payer and switches OS credentials (`apply_now=true` default).
 4. `list_saved_accounts()`:
-   Returns array of all saved accounts, active state, tiers, and remaining percentages.
-
-### MCP Configuration Snippet
-
-#### For Gemini CLI / Antigravity / Claude Code (`mcp_config.json` or `settings.json`):
-```json
-{
-  "mcpServers": {
-    "antigravity-account-suite": {
-      "command": "python",
-      "args": [
-        "%USERPROFILE%\\.gemini\\antigravity\\bin\\mcp_server.py"
-      ],
-      "env": {
-        "PYTHONIOENCODING": "utf-8"
-      }
-    }
-  }
-}
-```
-
----
-
-## 6. Autonomous Quota Exhaustion & Failover Workflow
-
-When an autonomous agent encounters rate limits (`429 Too Many Requests` or `RESOURCE_EXHAUSTED`):
-
-1. **Query Available Accounts:**
-   ```bash
-   agy-switch --status-json
-   ```
-2. **Select Account with Highest Remaining Quota:**
-   Parse `saved_accounts` and choose the account with the highest `remaining_pct` and `weekly_remaining_pct`.
-3. **Execute Seamless In-Place Switch:**
-   ```bash
-   agy-switch --switch <target_account_email> --no-restart
-   ```
-4. **Retry the Prompt/Action:**
-   Verify `active_account` in `active_quota.json` is updated, and proceed without interrupting user workflows.
+   Returns sanitized array of all saved accounts (`has_token`, `needs_reauth`, tiers, remaining %, `auth_state`).
+5. `diagnose_suite()`:
+   Returns frozen v3.0 health diagnostics (`ok`, `version`, `system`, `auth_state`, `cdp`, `sync_daemon`, `control_center`, `fonts`, `accounts`, `issues`).

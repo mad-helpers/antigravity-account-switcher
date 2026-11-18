@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "antigravity-account-suite": {
+      "command": "python",
+      "args": [
+        "mcp_server.py"
+      ],
+      "env": {
+        "PYTHONIOENCODING": "utf-8"
+      }
+    }
+  }
+}

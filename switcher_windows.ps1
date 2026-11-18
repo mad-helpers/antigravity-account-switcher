@@ -1,20 +1,22 @@
 ﻿<#
 .SYNOPSIS
-    Antigravity Account Switcher & Migration Suite for Windows 10 & 11
-    Author: Ethan Carter (https://github.com/Bombhub-apk) & Madgod-xyz
+    Antigravity Account Switcher, 6-Pool Quota & Smart RTL Suite v3.0 for Windows 10 & 11
+    Organization: mad-helpers (https://github.com/mad-helpers/antigravity-account-switcher)
+    Authors: mad-helpers (Madgod-xyz & Bombhub-apk)
     Description:
-        Seamless 1-click Google account switcher & project migration suite for Google Antigravity.
-        Features iOS Liquid Glass UI, multi-language support (EN, FA, ZH, ES), and live model quotas.
+        Seamless 1-click Google account switcher, 6-pool real-time model quotas, and project migration suite for Google Antigravity.
 #>
 
 param (
     [switch]$Usage,
     [switch]$List,
+    [switch]$Doctor,
     [string]$Switch,
     [string[]]$SetProjectQuota,
     [string]$LaunchInstance,
     [switch]$StatusJson,
     [switch]$NoRestart,
+    [switch]$NoSwitch,
     [switch]$Save,
     [switch]$Logout,
     [string]$Migrate,
@@ -24,10 +26,9 @@ param (
     [switch]$Help
 )
 
-$GitHubRepoUrl = "https://github.com/Bombhub-apk/antigravity-account-switcher"
-$AuthorName = "Ethan Carter (https://github.com/Bombhub-apk) & Madgod-xyz"
+$GitHubRepoUrl = "https://github.com/mad-helpers/antigravity-account-switcher"
+$AuthorName = "mad-helpers (Madgod-xyz & Bombhub-apk)"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$AppDir = Join-Path $ScriptDir "app"
 $AccountsDir = Join-Path $HOME ".gemini\accounts"
 $ManifestPath = Join-Path $AccountsDir "manifest.json"
 
@@ -139,20 +140,20 @@ function Get-CurrentToken {
 }
 
 function Restart-Antigravity {
-    Write-Host "🔄 Restarting Google Antigravity..." -ForegroundColor Cyan
+    Write-Host "🔄 Restarting Google Antigravity (--remote-debugging-port=0)..." -ForegroundColor Cyan
     Get-Process -Name "Antigravity" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 1
-    
+
     $paths = @(
         "$env:LOCALAPPDATA\Programs\Antigravity\Antigravity.exe",
         "$env:ProgramFiles\Antigravity\Antigravity.exe",
-        "$env:ProgramFiles(x86)\Antigravity\Antigravity.exe"
+        "${env:ProgramFiles(x86)}\Antigravity\Antigravity.exe"
     )
-    $exe = $paths | Where-Object { Test-Path $_ } | Select-Object -First 1
+    $exe = $paths | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
     if ($exe) {
-        Start-Process $exe
+        Start-Process $exe -ArgumentList "--remote-debugging-port=0"
     } else {
-        Start-Process "Antigravity" -ErrorAction SilentlyContinue
+        Start-Process "Antigravity" -ArgumentList "--remote-debugging-port=0" -ErrorAction SilentlyContinue
     }
 }
 
@@ -169,13 +170,15 @@ function Switch-Account($accountKey) {
         return $false
     }
     $token = (Get-Content $tokenFile -Raw -Encoding UTF8).Trim()
-    
-    # Write to both targets for maximum compatibility
+
     $ok1 = [WinCred]::Write("gemini:antigravity", "antigravity", $token)
     $ok2 = [WinCred]::Write("gemini", "antigravity", $token)
-    
-    if ($ok1 -or $ok2) {
-        Restart-Antigravity
+    $ok3 = [WinCred]::Write("antigravity", "antigravity", $token)
+
+    if ($ok1 -or $ok2 -or $ok3) {
+        if (-not $NoRestart) {
+            Restart-Antigravity
+        }
         Write-Host "✓ Successfully switched to $accountKey!" -ForegroundColor Green
         return $true
     } else {
@@ -184,143 +187,50 @@ function Switch-Account($accountKey) {
     }
 }
 
-function Save-CurrentAccount {
-    $token = Get-CurrentToken
-    if (!$token) {
-        Write-Host "❌ No active Antigravity account found. Please sign in to Antigravity first." -ForegroundColor Yellow
-        return $false
-    }
-
-    # Fetch info using quota engine
-    $pyScript = Join-Path $ScriptDir "quota_engine.py"
-    $quotaData = $null
-    try {
-        $rawLines = python $pyScript
-        $jsonStr = $rawLines -join "`n"
-        $quotaData = $jsonStr | ConvertFrom-Json
-    } catch {}
-
-    $email = if ($quotaData -and $quotaData.email) { $quotaData.email } else { "user@antigravity.ai" }
-    $tier = if ($quotaData -and $quotaData.tier) { $quotaData.tier } else { "Free" }
-    $tierCode = if ($quotaData -and $quotaData.tier_code) { $quotaData.tier_code } else { "free" }
-    $remPct = if ($quotaData -and $quotaData.session) { $quotaData.session.remaining_pct } else { 100 }
-
-    $tokenFile = Join-Path $AccountsDir "$($email -replace '[\\/:*?""<>|]', '_').token"
-    $token | Set-Content $tokenFile -Encoding UTF8
-    
-    $manifest = Get-Manifest
-    $newEntry = [PSCustomObject]@{
-        label = $email
-        email = $email
-        tier = $tier
-        tier_code = $tierCode
-        remaining_pct = $remPct
-        token_file = $tokenFile
-        saved_at = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-    }
-    $manifest | Add-Member -MemberType NoteProperty -Name $email -Value $newEntry -Force
-    Save-Manifest $manifest
-    Write-Host "✓ Account '$email' saved successfully!" -ForegroundColor Green
-    return $true
-}
-
-function Logout-And-Add {
-    [WinCred]::Delete("gemini:antigravity") | Out-Null
-    [WinCred]::Delete("gemini") | Out-Null
-    Restart-Antigravity
-    Write-Host "✓ Logged out from Antigravity. Please sign in with your other Google account!" -ForegroundColor Green
-}
-
-function Show-UsageCLI {
-    $pyScript = Join-Path $ScriptDir "quota_engine.py"
-    try {
-        $rawLines = python $pyScript
-        $jsonStr = $rawLines -join "`n"
-        $data = $jsonStr | ConvertFrom-Json
-        if (!$data -or $data.error) {
-            Write-Host "❌ Could not retrieve Antigravity usage. Please check internet connection or sign in." -ForegroundColor Red
-            return
-        }
-
-        $email = $data.email
-        $tier = $data.tier
-        $sess = $data.session
-        $used = $sess.used_pct
-        $rem = $sess.remaining_pct
-        $countdown = $sess.resets_in
-
-        function Make-Bar($pct, $width=20) {
-            $fill = [math]::Min($width, [math]::Max(0, [math]::Round(($pct / 100.0) * $width)))
-            $empty = $width - $fill
-            return ("█" * $fill) + ("░" * $empty)
-        }
-
-        $bar = Make-Bar $used 22
-
-        Write-Host "`n┌─────────────────────────────────────────────────────────────┐" -ForegroundColor Cyan
-        Write-Host "│             ANTIGRAVITY ACCOUNT SUITE • MADGOD-XYZ          │" -ForegroundColor Cyan
-        Write-Host "│   Plan: $tier  •  Account: $email" -ForegroundColor Green
-        Write-Host "├─────────────────────────────────────────────────────────────┤" -ForegroundColor Cyan
-        Write-Host "│  Active Session Quota                                       │" -ForegroundColor White
-        Write-Host "│  $used% used ($rem% remaining) • Resets: $countdown" -ForegroundColor Yellow
-        Write-Host "│  [$bar] $used%                                 │" -ForegroundColor Cyan
-        Write-Host "├─────────────────────────────────────────────────────────────┤" -ForegroundColor Cyan
-        Write-Host "│  Model Breakdown                                            │" -ForegroundColor White
-        foreach ($p in $data.pools) {
-            $pBar = Make-Bar $p.used_pct 16
-            Write-Host "│  • $($p.name): $($p.used_pct)% used [$pBar] (Resets: $($p.resets_in))" -ForegroundColor White
-        }
-        Write-Host "└─────────────────────────────────────────────────────────────┘`n" -ForegroundColor Cyan
-    } catch {
-        Write-Host "❌ Error running quota engine: $_" -ForegroundColor Red
-    }
-}
-
 function Open-LiquidGlassUI {
-    # Prepare live state payload
-    $pyQuota = Join-Path $ScriptDir "quota_engine.py"
-    $pyMigrate = Join-Path $ScriptDir "migration_engine.py"
-    
-    $quotaJson = "{}"
-    $convsJson = "[]"
+    $cliPy = Join-Path $ScriptDir "cli.py"
+    if (Test-Path $cliPy) {
+        & python $cliPy --gui
+        return
+    }
+
+    $serverPy = Join-Path $ScriptDir "server.py"
+    $controlUrl = "http://127.0.0.1:39285/index.html"
+    $stateUrl = "http://127.0.0.1:39285/api/state"
+
+    $ready = $false
     try {
-        $quotaLines = python $pyQuota
-        $quotaJson = $quotaLines -join "`n"
-    } catch {}
-    try {
-        $convsLines = python $pyMigrate --list
-        $convsJson = $convsLines -join "`n"
+        $resp = Invoke-WebRequest -Uri $stateUrl -UseBasicParsing -TimeoutSec 1 -ErrorAction Stop
+        if ($resp.StatusCode -eq 200) { $ready = $true }
     } catch {}
 
-    $manifest = Get-Manifest
-    $manifestJson = $manifest | ConvertTo-Json -Depth 4
+    if (-not $ready -and (Test-Path $serverPy)) {
+        $pyw = Get-Command pythonw.exe -ErrorAction SilentlyContinue
+        $pyExe = if ($pyw) { $pyw.Source } else { "python.exe" }
+        Start-Process $pyExe -ArgumentList "`"$serverPy`" --server-only" -WorkingDirectory $ScriptDir -WindowStyle Hidden
+        for ($i = 0; $i -lt 12; $i++) {
+            Start-Sleep -Milliseconds 250
+            try {
+                $resp = Invoke-WebRequest -Uri $stateUrl -UseBasicParsing -TimeoutSec 1 -ErrorAction Stop
+                if ($resp.StatusCode -eq 200) { break }
+            } catch {}
+        }
+    }
 
-    # Generate standalone runner html with baked-in data for instant offline launch
-    $templateHtml = Get-Content (Join-Path $AppDir "index.html") -Raw -Encoding UTF8
-    $injectedScript = "<script>`nwindow.INITIAL_PAYLOAD = { activeAccount: " + $quotaJson + ", savedAccounts: " + $manifestJson + " };`nwindow.INITIAL_CONVERSATIONS = " + $convsJson + ";`n</script>"
-    $runtimeHtml = $templateHtml.Replace("<!-- Scripts -->", "$injectedScript`n  <!-- Scripts -->")
-    $runtimePath = Join-Path $AppDir "runtime_window.html"
-    $runtimeHtml | Set-Content $runtimePath -Encoding UTF8
-
-    # Launch in standalone App mode via Edge or Chrome
     $edgePaths = @(
-        "$env:ProgramFiles(x86)\Microsoft\Edge\Application\msedge.exe",
+        "${env:ProgramFiles(x86)}\Microsoft\Edge\Application\msedge.exe",
         "$env:ProgramFiles\Microsoft\Edge\Application\msedge.exe"
     )
     $chromePaths = @(
         "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe",
         "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
-        "$env:ProgramFiles(x86)\Google\Chrome\Application\chrome.exe"
+        "${env:ProgramFiles(x86)}\Google\Chrome\Application\chrome.exe"
     )
-
-    $browserExe = ($edgePaths + $chromePaths) | Where-Object { Test-Path $_ } | Select-Object -First 1
-
+    $browserExe = ($edgePaths + $chromePaths) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
     if ($browserExe) {
-        $fileUrl = "file:///$($runtimePath -replace '\\', '/')"
-        $argsList = "--app=$fileUrl --window-size=620,860 --disable-features=Translate"
-        Start-Process $browserExe -ArgumentList $argsList
+        Start-Process $browserExe -ArgumentList "--app=$controlUrl --window-size=620,860 --disable-features=Translate"
     } else {
-        Start-Process $runtimePath
+        Start-Process $controlUrl
     }
 }
 
@@ -333,8 +243,17 @@ if ($Help) {
     if (Test-Path $cliPy) {
         & python $cliPy --help
     } else {
-        Write-Host "`nAntigravity Account Switcher & Quota Monitor CLI" -ForegroundColor Cyan
-        Write-Host "Commands: -Usage, -List, -Switch <email>, -SetProjectQuota <proj> <email>, -LaunchInstance <slot>, -StatusJson, -Save, -Logout" -ForegroundColor White
+        Write-Host "`nAntigravity Account Switcher & Quota Monitor CLI v3.0 ($AuthorName)" -ForegroundColor Cyan
+        Write-Host "Commands: -Usage, -List, -Doctor, -Switch <email>, -SetProjectQuota <proj> <email>, -LaunchInstance <slot>, -StatusJson, -Save, -Logout" -ForegroundColor White
+    }
+    exit
+}
+
+if ($Doctor) {
+    if (Test-Path $cliPy) {
+        & python $cliPy --doctor
+    } else {
+        & python (Join-Path $ScriptDir "quota_engine.py") --doctor
     }
     exit
 }
@@ -342,18 +261,14 @@ if ($Help) {
 if ($StatusJson) {
     if (Test-Path $cliPy) {
         & python $cliPy --status-json
-    } else {
-        $manifest = Get-Manifest
-        $manifest | ConvertTo-Json -Depth 5
     }
     exit
 }
 
 if ($SetProjectQuota) {
     if (Test-Path $cliPy) {
-        & python $cliPy --set-project-quota $SetProjectQuota
-    } else {
-        Write-Host "❌ cli.py required for setting project quota." -ForegroundColor Red
+        $extra = if ($NoSwitch) { @("--no-switch") } else { @() }
+        & python $cliPy --set-project-quota $SetProjectQuota @extra
     }
     exit
 }
@@ -361,14 +276,12 @@ if ($SetProjectQuota) {
 if ($Usage) {
     if (Test-Path $cliPy) {
         & python $cliPy --usage
-    } else {
-        Show-UsageCLI
     }
     exit
 }
 
 if ($About) {
-    Write-Host "`n🚀 Antigravity Account Switcher & Migration Suite" -ForegroundColor Cyan
+    Write-Host "`n🚀 Antigravity Account Switcher, Quota & Smart RTL Suite v3.0" -ForegroundColor Cyan
     Write-Host "👨‍💻 Developed by: $AuthorName" -ForegroundColor Yellow
     Write-Host "⭐ GitHub Repository: $GitHubRepoUrl`n" -ForegroundColor White
     exit
@@ -382,28 +295,13 @@ if ($GitHub) {
 if ($List) {
     if (Test-Path $cliPy) {
         & python $cliPy --list
-    } else {
-        $manifest = Get-Manifest
-        $curr = Get-CurrentToken
-        Write-Host "`n🚀 Saved Antigravity Accounts [Windows]" -ForegroundColor Cyan
-        Write-Host "👨‍💻 Author: $AuthorName ($GitHubRepoUrl)`n" -ForegroundColor Gray
-        foreach ($prop in $manifest.PSObject.Properties) {
-            $active = ""
-            $tf = $prop.Value.token_file
-            if ($curr -and (Test-Path $tf) -and ((Get-Content $tf -Raw -Encoding UTF8).Trim() -eq $curr.Trim())) {
-                $active = " [ACTIVE ●]"
-            }
-            $tier = if ($prop.Value.tier) { "[$($prop.Value.tier)]" } else { "[Free]" }
-            Write-Host " • $($prop.Name) $tier$active (Saved: $($prop.Value.saved_at))" -ForegroundColor White
-        }
-        Write-Host ""
     }
     exit
 }
 
 if ($Switch) {
     if (Test-Path $cliPy) {
-        $extra = if ($NoRestart) { @("--no-restart") } else { @() }
+        $extra = if ($NoRestart) { @("--no-restart") } else { @("--restart") }
         & python $cliPy --switch $Switch @extra
     } else {
         Switch-Account $Switch
@@ -423,8 +321,6 @@ if ($LaunchInstance) {
 if ($Save) {
     if (Test-Path $cliPy) {
         & python $cliPy --save
-    } else {
-        Save-CurrentAccount
     }
     exit
 }
@@ -433,11 +329,12 @@ if ($Logout) {
     if (Test-Path $cliPy) {
         & python $cliPy --logout
     } else {
-        Logout-And-Add
+        [WinCred]::Delete("gemini:antigravity") | Out-Null
+        [WinCred]::Delete("gemini") | Out-Null
+        [WinCred]::Delete("antigravity") | Out-Null
+        Restart-Antigravity
     }
     exit
 }
 
-# Default: Open the new iOS Liquid Glass GUI
 Open-LiquidGlassUI
-

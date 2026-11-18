@@ -1,0 +1,17 @@
+{
+  "$schema": "https://antigravity.google/schemas/v1/plugin.json",
+  "name": "antigravity-account-suite",
+  "displayName": "Antigravity Account Switcher, Quota & Smart RTL",
+  "version": "3.0.0",
+  "description": "Real-time 6-pool AI model quota telemetry (Gemini 4 Hydrogen, Gemini 4 Argon, Gemini 4 Carbon & Orchestrator, Gemini 3.8 Flash, Claude 4.6, GPT-OSS 120B), 1-click Google account switcher, per-project quota routing, Smart RTL v3, and Liquid Glass Aux Pane.",
+  "author": "mad-helpers (Madgod-xyz & Bombhub-apk)",
+  "homepage": "https://github.com/mad-helpers/antigravity-account-switcher",
+  "repository": "https://github.com/mad-helpers/antigravity-account-switcher",
+  "license": "MIT",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "Check my live Antigravity model quotas and session mismatch status",
+    "Run diagnose_suite to verify LanguageServer RPC, CDP HUD, and account tokens",
+    "Open the Account & Quota Hub sidecar panel"
+  ]
+}

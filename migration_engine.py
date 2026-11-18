@@ -10,18 +10,27 @@ Description:
 """
 
 import os
+import re
 import sys
 import glob
 import platform
 import json
 import uuid
 import time
+import threading
 import shutil
 import sqlite3
 import datetime
 import subprocess
 import urllib.parse
 from pathlib import Path
+
+ROOT_DIR = Path(__file__).resolve().parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from ag_suite import quota as _quota  # noqa: E402
+from ag_suite import store as _store  # noqa: E402
 
 if hasattr(sys.stdout, 'reconfigure'):
     try:
@@ -44,53 +53,47 @@ TASK_ISOLATION_MANIFEST_PATH = os.path.join(ANTIGRAVITY_DIR, 'task_isolation_man
 TASKS_DIR = os.path.join(ANTIGRAVITY_DIR, 'tasks')
 SCHEDULED_DIR = os.path.join(ANTIGRAVITY_DIR, 'scheduled')
 
+_META_CACHE_LOCK = threading.Lock()
+_PROJECTS_CACHE = {"data": None, "time": 0.0}
+_ALLOWED_CONVS_CACHE = {}
+_META_CACHE_TTL = 10.0
+
+
+def invalidate_migration_caches():
+    """Clear short-lived projects and allowed-conversations caches after manifest updates."""
+    with _META_CACHE_LOCK:
+        _PROJECTS_CACHE["data"] = None
+        _PROJECTS_CACHE["time"] = 0.0
+        _ALLOWED_CONVS_CACHE.clear()
+
+
 def get_primary_account():
     """Dynamically get primary account without hardcoding credentials."""
-    try:
-        man_path = os.path.join(ACCOUNTS_DIR, 'manifest.json')
-        if os.path.exists(man_path):
-            with open(man_path, 'r', encoding='utf-8') as f:
-                m = json.load(f)
-                if m:
-                    return list(m.keys())[0]
-    except Exception:
-        pass
-    try:
-        import quota_engine
-        q = quota_engine.fetch_quota_and_tier()
-        if q and q.get('email'):
-            return q['email']
-    except Exception:
-        pass
-    return "primary_account"
+    return _store.get_primary_account()
+
 
 def get_secondary_account():
     """Dynamically get secondary account from manifest."""
-    try:
-        man_path = os.path.join(ACCOUNTS_DIR, 'manifest.json')
-        if os.path.exists(man_path):
-            with open(man_path, 'r', encoding='utf-8') as f:
-                m = json.load(f)
-                if len(m) > 1:
-                    return list(m.keys())[1]
-    except Exception:
-        pass
-    return "secondary_account"
+    return _store.get_secondary_account()
+
 
 PRIMARY_ACCOUNT = get_primary_account()
 SECONDARY_ACCOUNT = get_secondary_account()
+
 
 def norm_account(acc):
     """Normalize account aliases (instance_1, instance_2, primary, secondary) to canonical email."""
     if not acc:
         return ""
     a = str(acc).strip().lower()
-    p = get_primary_account().lower()
-    s = get_secondary_account().lower()
+    prim = get_primary_account()
+    sec = get_secondary_account()
+    p = prim.lower()
+    s = sec.lower()
     if a in ('instance_1', 'primary', 'acc1') or (p and a == p):
-        return get_primary_account()
+        return prim
     if a in ('instance_2', 'secondary', 'acc2') or (s and a == s):
-        return get_secondary_account()
+        return sec
     return str(acc).strip()
 
 def ensure_dirs():
@@ -163,21 +166,13 @@ def save_profile_sync_manifest(manifest):
     ensure_dirs()
     manifest["updated_at"] = datetime.datetime.now().isoformat()
     try:
-        temp_path = f"{PROFILE_SYNC_MANIFEST_PATH}.tmp"
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            json.dump(manifest, f, indent=2, ensure_ascii=False)
-        if os.path.exists(PROFILE_SYNC_MANIFEST_PATH):
-            os.replace(temp_path, PROFILE_SYNC_MANIFEST_PATH)
-        else:
-            os.rename(temp_path, PROFILE_SYNC_MANIFEST_PATH)
-        return True
-    except Exception as e:
-        try:
-            with open(PROFILE_SYNC_MANIFEST_PATH, 'w', encoding='utf-8') as f:
-                json.dump(manifest, f, indent=2, ensure_ascii=False)
+        if _store.atomic_write_json(PROFILE_SYNC_MANIFEST_PATH, manifest):
+            invalidate_migration_caches()
             return True
-        except Exception:
-            return False
+        return False
+    except Exception:
+        invalidate_migration_caches()
+        return False
 
 def discover_raw_projects():
     """Read all project files from .gemini/config/projects/."""
@@ -204,7 +199,11 @@ def discover_raw_projects():
                         puri = r['gitFolder']['folderUri']
                         break
                 if puri.startswith('file:///'):
-                    puri = urllib.parse.unquote(puri[8:]).replace('/', '\\')
+                    raw_p = urllib.parse.unquote(puri[7:])
+                    if os.name == 'nt' and len(raw_p) >= 3 and raw_p[0] == '/' and raw_p[2] == ':':
+                        puri = raw_p[1:].replace('/', '\\')
+                    else:
+                        puri = raw_p
                 projects[pid] = {'id': pid, 'name': pname, 'path': puri}
         except Exception:
             pass
@@ -225,55 +224,120 @@ def get_project_conversation_counts():
             pass
     return counts
 
-def list_projects(account=None):
+def list_projects(account=None, use_cache=True):
     """
     List all local projects with their assignment status, paths, conversation counts,
     and dual-instance enablement status.
     """
-    manifest = load_profile_sync_manifest()
-    raw_projects = discover_raw_projects()
-    conv_counts = get_project_conversation_counts()
-    project_profiles = manifest.get("project_profiles", {})
+    now = time.time()
+    items = None
+    if use_cache:
+        with _META_CACHE_LOCK:
+            cached = _PROJECTS_CACHE.get("data")
+            if cached is not None and (now - _PROJECTS_CACHE.get("time", 0.0)) < _META_CACHE_TTL:
+                items = [dict(p) for p in cached]
 
-    items = []
-    # Merge discovered raw projects with manifest
-    all_pids = set(raw_projects.keys()).union(set(project_profiles.keys()))
+    if items is None:
+        manifest = load_profile_sync_manifest()
+        raw_projects = discover_raw_projects()
+        conv_counts = get_project_conversation_counts()
+        project_profiles = manifest.get("project_profiles", {})
+        prim_acc = get_primary_account().lower()
+        sec_acc = get_secondary_account().lower()
 
-    for pid in all_pids:
-        raw = raw_projects.get(pid, {})
-        prof = project_profiles.get(pid, {})
-        
-        name = prof.get("name") or raw.get("name") or pid
-        path = prof.get("path") or raw.get("path") or ""
-        assigned = prof.get("assigned_accounts", [get_primary_account()])
-        quota_account = norm_account(prof.get("quota_account") or (assigned[0] if assigned else get_primary_account()))
-        count = conv_counts.get(pid, 0)
-        
-        item = {
-            "id": pid,
-            "name": name,
-            "path": path,
-            "assigned_accounts": assigned,
-            "quota_account": quota_account,
-            "conversation_count": count,
-            "enabled_all": prof.get("enabled_all", False),
-            "disabled_all": prof.get("disabled_all", len(assigned) == 0),
-            "is_instance1_enabled": any(get_primary_account().lower() in a.lower() for a in assigned),
-            "is_instance2_enabled": any(get_secondary_account().lower() in a.lower() for a in assigned),
-            "is_shared": (len(assigned) > 1 or prof.get("enabled_all", False)),
-            "sync_mode": prof.get("sync_mode", "shared" if len(assigned) > 1 else "isolated")
+        items = []
+        all_pids = set(raw_projects.keys()).union(set(project_profiles.keys()))
+
+        for pid in all_pids:
+            raw = raw_projects.get(pid, {})
+            prof = project_profiles.get(pid, {})
+
+            name = prof.get("name") or raw.get("name") or pid
+            path = prof.get("path") or raw.get("path") or ""
+            assigned = prof.get("assigned_accounts", [get_primary_account()])
+            quota_account = norm_account(prof.get("quota_account") or (assigned[0] if assigned else get_primary_account()))
+            count = conv_counts.get(pid, 0)
+
+            items.append({
+                "id": pid,
+                "name": name,
+                "path": path,
+                "assigned_accounts": assigned,
+                "quota_account": quota_account,
+                "conversation_count": count,
+                "enabled_all": prof.get("enabled_all", False),
+                "disabled_all": prof.get("disabled_all", len(assigned) == 0),
+                "is_instance1_enabled": any(prim_acc in a.lower() for a in assigned),
+                "is_instance2_enabled": any(sec_acc in a.lower() for a in assigned),
+                "is_shared": (len(assigned) > 1 or prof.get("enabled_all", False)),
+                "sync_mode": prof.get("sync_mode", "shared" if len(assigned) > 1 else "isolated")
+            })
+
+        items.sort(key=lambda x: (x["disabled_all"], -x["conversation_count"], x["name"].lower()))
+        with _META_CACHE_LOCK:
+            _PROJECTS_CACHE["data"] = [dict(p) for p in items]
+            _PROJECTS_CACHE["time"] = time.time()
+
+    if account:
+        acc_clean = norm_account(account).lower()
+        return [p for p in items if any(norm_account(a).lower() == acc_clean for a in p.get("assigned_accounts", []))]
+    return items
+
+
+def resolve_project(project_arg, cwd=None):
+    """Resolve project ID, name, or directory path to normalized {id, name, path, quota_account}."""
+    if not project_arg or not str(project_arg).strip():
+        return None
+    raw_arg = str(project_arg).strip()
+    proj_clean = raw_arg.lower()
+    norm_arg = os.path.normpath(raw_arg).lower()
+    projects = list_projects()
+
+    def _shape(p):
+        return {
+            "id": str(p.get("id") or ""),
+            "name": str(p.get("name") or p.get("id") or ""),
+            "path": str(p.get("path") or ""),
+            "quota_account": p.get("quota_account"),
         }
 
-        if account:
-            acc_clean = norm_account(account).lower()
-            if not any(norm_account(a).lower() == acc_clean for a in assigned):
-                continue
+    for p in projects:
+        if str(p.get("id", "")).lower() == proj_clean:
+            return _shape(p)
+    for p in projects:
+        p_path = str(p.get("path") or "")
+        if p_path and os.path.normpath(p_path).lower() == norm_arg:
+            return _shape(p)
+        if str(p.get("name", "")).lower() == proj_clean:
+            return _shape(p)
+    for p in projects:
+        p_name = str(p.get("name") or "").lower()
+        p_path = str(p.get("path") or "").lower()
+        if proj_clean in p_name or (p_path and (norm_arg in os.path.normpath(p_path) or proj_clean in p_path)):
+            return _shape(p)
 
-        items.append(item)
-
-    # Sort projects: active first, then by conversation count descending
-    items.sort(key=lambda x: (x["disabled_all"], -x["conversation_count"], x["name"].lower()))
-    return items
+    base_cwd = str(cwd) if cwd else os.getcwd()
+    for cand in (
+        raw_arg,
+        os.path.join(base_cwd, raw_arg),
+        os.path.join(str(ROOT_DIR.parent), raw_arg),
+        os.path.join(str(ROOT_DIR), raw_arg),
+    ):
+        if os.path.isdir(cand):
+            abs_c = os.path.abspath(cand)
+            norm_c = os.path.normpath(abs_c).lower()
+            for p in projects:
+                p_path = str(p.get("path") or "")
+                if p_path and os.path.normpath(p_path).lower() == norm_c:
+                    return _shape(p)
+            folder_name = os.path.basename(os.path.normpath(abs_c))
+            return {
+                "id": folder_name,
+                "name": folder_name,
+                "path": abs_c,
+                "quota_account": None,
+            }
+    return None
 
 def set_project_assignment(project_id, accounts, sync_mode='shared', enabled=None):
     """
@@ -557,7 +621,7 @@ def get_conversation_summaries_metadata():
             pass
     return meta
 
-def list_conversations(account=None, project_id=None):
+def list_conversations(account=None, project_id=None, include_titles=True):
     """
     List all local conversations with metadata (title, project, assigned accounts,
     last modified, size, artifacts).
@@ -567,6 +631,8 @@ def list_conversations(account=None, project_id=None):
     project_profiles = manifest.get("project_profiles", {})
     conv_profiles = manifest.get("conversation_profiles", {})
     db_meta = get_conversation_summaries_metadata()
+    prim_acc = get_primary_account()
+    sec_acc = get_secondary_account().lower()
 
     db_files = glob.glob(os.path.join(CONVERSATIONS_DIR, '*.db'))
     conversations = []
@@ -574,8 +640,7 @@ def list_conversations(account=None, project_id=None):
     for db_path in db_files:
         basename = os.path.basename(db_path)
         conv_id = os.path.splitext(basename)[0]
-        
-        # Skip WAL/SHM temporary files
+
         if '-wal' in conv_id or '-shm' in conv_id:
             continue
 
@@ -583,27 +648,21 @@ def list_conversations(account=None, project_id=None):
             stat = os.stat(db_path)
             mtime = stat.st_mtime
             size_kb = round(stat.st_size / 1024, 1)
-            
+
             brain_folder = os.path.join(BRAIN_DIR, conv_id)
             has_brain = os.path.isdir(brain_folder)
-            
+
             c_meta = db_meta.get(conv_id, {})
             c_pid = c_meta.get("project_id") or "outside-of-project"
-            
-            # Resolve project title
             p_prof = project_profiles.get(c_pid, {})
             p_name = p_prof.get("name") or c_pid
-            
-            # Determine assigned accounts:
-            # 1. Explicit conversation assignment in manifest
-            # 2. Inherited from project assignment
-            # 3. Default to Primary Account
+
             if conv_id in conv_profiles and conv_profiles[conv_id].get("assigned_accounts"):
                 assigned_accounts = conv_profiles[conv_id]["assigned_accounts"]
             elif c_pid in project_profiles and project_profiles[c_pid].get("assigned_accounts"):
                 assigned_accounts = project_profiles[c_pid]["assigned_accounts"]
             else:
-                assigned_accounts = [PRIMARY_ACCOUNT]
+                assigned_accounts = [prim_acc]
 
             if project_id and c_pid != project_id:
                 continue
@@ -613,7 +672,7 @@ def list_conversations(account=None, project_id=None):
                 if not any(acc_clean.lower() == norm_account(a).lower() for a in assigned_accounts):
                     continue
 
-            title = c_meta.get("title") or get_conversation_title(conv_id)
+            title = c_meta.get("title") or (get_conversation_title(conv_id) if include_titles else f"Conversation {conv_id[:8]}")
             dt_str = datetime.datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M')
 
             conversations.append({
@@ -622,7 +681,7 @@ def list_conversations(account=None, project_id=None):
                 'project_id': c_pid,
                 'project_name': p_name,
                 'assigned_accounts': assigned_accounts,
-                'is_in_instance2': any(SECONDARY_ACCOUNT.lower() in a.lower() for a in assigned_accounts),
+                'is_in_instance2': any(sec_acc in a.lower() for a in assigned_accounts),
                 'last_modified': dt_str,
                 'timestamp': mtime,
                 'size_kb': size_kb,
@@ -631,21 +690,32 @@ def list_conversations(account=None, project_id=None):
         except Exception:
             continue
 
-    # Sort descending by last modified
     conversations.sort(key=lambda x: x['timestamp'], reverse=True)
     return conversations
 
-def get_allowed_conversations(account):
+
+def get_allowed_conversations(account, use_cache=True):
     """
     Returns list of conversation IDs allowed for the given account/instance.
-    Used for selective DOM filtering in Antigravity.
+    Uses fast include_titles=False scanning with a 10s TTL cache.
     """
     target = norm_account(account)
-    convs = list_conversations(account=target)
+    cache_key = target.lower() if target else "_all"
+    now = time.time()
+    if use_cache:
+        with _META_CACHE_LOCK:
+            entry = _ALLOWED_CONVS_CACHE.get(cache_key)
+            if entry and (now - entry.get("time", 0.0)) < _META_CACHE_TTL:
+                return list(entry["ids"])
+
+    convs = list_conversations(account=target, include_titles=False)
     allowed = [c["id"] for c in convs]
     if not allowed:
-        all_convs = list_conversations()
-        return [c["id"] for c in all_convs]
+        all_convs = list_conversations(include_titles=False)
+        allowed = [c["id"] for c in all_convs]
+
+    with _META_CACHE_LOCK:
+        _ALLOWED_CONVS_CACHE[cache_key] = {"ids": list(allowed), "time": time.time()}
     return allowed
 
 def assign_conversation_account(conv_id, account, action='add'):
@@ -701,41 +771,12 @@ def load_task_manifest():
         except Exception:
             pass
 
-    # Default isolation rules for identified Windows tasks
+    prim_acc = get_primary_account()
+    sec_acc = get_secondary_account()
     default_manifest = {
-        "version": "2.0",
+        "version": "3.0",
         "updated_at": datetime.datetime.now().isoformat(),
         "tasks": {
-            "SamansaDailySEOAgent": {
-                "name": "SamansaDailySEOAgent",
-                "owner_account": PRIMARY_ACCOUNT,
-                "allowed_instances": ["instance_1"],
-                "isolated_from_account2": True,
-                "enabled": True,
-                "system_type": "windows_scheduled_task",
-                "project_path": os.path.expandvars(r"%USERPROFILE%\Desktop\agent-helper\samansa SEO Agent"),
-                "description": "Daily SEO Agent Runner (12:30 PM)"
-            },
-            "NabiPerfume_Daily_SEO": {
-                "name": "NabiPerfume_Daily_SEO",
-                "owner_account": PRIMARY_ACCOUNT,
-                "allowed_instances": ["instance_1"],
-                "isolated_from_account2": True,
-                "enabled": True,
-                "system_type": "windows_scheduled_task",
-                "project_path": os.path.expandvars(r"%USERPROFILE%\Desktop\agent-helper\nabi perfume SEO"),
-                "description": "Nabi Perfume SEO Automation"
-            },
-            "Nabi_Daily_SEO_1230": {
-                "name": "Nabi_Daily_SEO_1230",
-                "owner_account": PRIMARY_ACCOUNT,
-                "allowed_instances": ["instance_1"],
-                "isolated_from_account2": True,
-                "enabled": True,
-                "system_type": "windows_scheduled_task",
-                "project_path": os.path.expandvars(r"%USERPROFILE%\Desktop\agent-helper\nabi perfume SEO"),
-                "description": "Nabi Daily SEO 12:30 Trigger"
-            },
             "AntigravityQuotaMonitor": {
                 "name": "AntigravityQuotaMonitor",
                 "owner_account": "shared",
@@ -748,14 +789,14 @@ def load_task_manifest():
             }
         },
         "account_rules": {
-            PRIMARY_ACCOUNT: {
+            prim_acc: {
                 "allow_running_tasks": True,
-                "assigned_tasks": ["SamansaDailySEOAgent", "NabiPerfume_Daily_SEO", "Nabi_Daily_SEO_1230", "AntigravityQuotaMonitor"]
+                "assigned_tasks": ["AntigravityQuotaMonitor"]
             },
-            SECONDARY_ACCOUNT: {
+            sec_acc: {
                 "allow_running_tasks": True,
                 "assigned_tasks": ["AntigravityQuotaMonitor"],
-                "blocked_tasks": ["SamansaDailySEOAgent", "NabiPerfume_Daily_SEO", "Nabi_Daily_SEO_1230"]
+                "blocked_tasks": []
             }
         }
     }
@@ -787,8 +828,10 @@ _tasks_cache = {}
 _tasks_cache_time = 0
 
 def discover_windows_scheduled_tasks(force=False):
-    """Query live Windows Scheduled Tasks matching agent or developer keywords."""
+    """Query live Windows Scheduled Tasks matching generic agent or Antigravity keywords."""
     global _tasks_cache, _tasks_cache_time
+    if platform.system().lower() != 'windows':
+        return {}
     now = time.time()
     if not force and _tasks_cache and (now - _tasks_cache_time < 60):
         return _tasks_cache
@@ -798,15 +841,14 @@ def discover_windows_scheduled_tasks(force=False):
     try:
         cmd = ['schtasks', '/query', '/fo', 'csv', '/nh']
         kwargs = {'capture_output': True, 'text': True, 'errors': 'ignore'}
-        if platform.system().lower() == 'windows':
-            kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
-            try:
-                si = subprocess.STARTUPINFO()
-                si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                si.wShowWindow = subprocess.SW_HIDE
-                kwargs['startupinfo'] = si
-            except Exception:
-                pass
+        kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0x08000000)
+        try:
+            si = subprocess.STARTUPINFO()
+            si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            si.wShowWindow = subprocess.SW_HIDE
+            kwargs['startupinfo'] = si
+        except Exception:
+            pass
         res = subprocess.run(cmd, **kwargs)
         for line in res.stdout.strip().split('\n'):
             line = line.strip()
@@ -819,7 +861,7 @@ def discover_windows_scheduled_tasks(force=False):
             tname_lower = tname.lower()
             if any(tname_lower.startswith(pref) for pref in ignore_prefixes):
                 continue
-            if any(k in tname_lower for k in ['antigravity', 'samansa', 'seo', 'agent', 'nabi', 'quota']):
+            if any(k in tname_lower for k in ['antigravity', 'quota', 'agent', 'mcp']):
                 next_run = parts[1] if len(parts) > 1 else "N/A"
                 status = parts[2] if len(parts) > 2 else "Unknown"
                 tasks[tname] = {
@@ -1205,8 +1247,7 @@ def check_task_guard(task_name, current_account=None, instance_id=None):
 
     if not current_account:
         try:
-            import sync_daemon
-            current_account = sync_daemon.get_instance_active_account(curr_instance)
+            current_account = _store.get_instance_active_account(curr_instance)
         except Exception:
             pass
         if not current_account:
@@ -1228,10 +1269,10 @@ def check_task_guard(task_name, current_account=None, instance_id=None):
                 except Exception:
                     pass
         if not current_account:
-            current_account = PRIMARY_ACCOUNT
+            current_account = get_primary_account()
 
     curr_clean = norm_account(current_account)
-    quota_acc = norm_account(task_entry.get("quota_account") or task_entry.get("owner_account") or PRIMARY_ACCOUNT)
+    quota_acc = norm_account(task_entry.get("quota_account") or task_entry.get("owner_account") or get_primary_account())
 
     # Multi-account assignment check
     assigned = task_entry.get("assigned_accounts")
@@ -1287,53 +1328,71 @@ def get_account_environment(account_email):
     env["ANTIGRAVITY_QUOTA_ACCOUNT"] = clean_acc
     
     tok_file = os.path.join(ACCOUNTS_DIR, f"{clean_acc}.token")
-    if os.path.exists(tok_file):
+    raw_tok = _store.read_account_token(clean_acc)
+    if not raw_tok and os.path.exists(tok_file):
         try:
             with open(tok_file, 'r', encoding='utf-8') as f:
                 raw_tok = f.read().strip()
-            import quota_engine
-            fresh_tok = quota_engine.ensure_fresh_token(raw_tok, account_email=clean_acc)
-            if fresh_tok:
-                access_tok = fresh_tok
-                if "access_token" in fresh_tok:
-                    try:
-                        d = json.loads(fresh_tok)
-                        access_tok = d.get("token", {}).get("access_token") or d.get("access_token") or fresh_tok
-                    except Exception:
-                        pass
+        except Exception:
+            raw_tok = None
+    if raw_tok:
+        try:
+            from ag_suite import vault as _vault
+            fresh_tok = _vault.ensure_fresh_token(raw_tok, account_email=clean_acc)
+            access_tok, _ = _vault.parse_token_payload(fresh_tok)
+            if access_tok:
                 env["GEMINI_CLI_OAUTH_TOKEN"] = access_tok
                 env["GOOGLE_OAUTH_ACCESS_TOKEN"] = access_tok
         except Exception:
             pass
     return env
 
-def run_guarded_task(task_name, custom_command=None):
+def run_guarded_task(task_name):
     """
-    Executes a task under its designated quota_account credentials,
-    enforcing guard rules and capturing execution status.
+    Execute a manifest-registered task under its designated quota_account credentials.
+    Default-deny: refuses unknown tasks and never accepts caller-supplied shell commands.
     """
+    if not task_name or not str(task_name).strip():
+        return {"success": False, "error": "Missing task_name"}
+
+    clean_task = str(task_name).strip()
     manifest = load_task_manifest()
-    task_entry = manifest.get("tasks", {}).get(task_name, {})
-    quota_acc = norm_account(task_entry.get("quota_account") or task_entry.get("owner_account") or PRIMARY_ACCOUNT)
-    
-    guard = check_task_guard(task_name, current_account=quota_acc)
+    task_entry = (manifest.get("tasks") or {}).get(clean_task)
+    if not isinstance(task_entry, dict):
+        return {
+            "success": False,
+            "error": f"Task guard blocked unknown or unregistered task '{clean_task}'"
+        }
+
+    quota_acc = norm_account(task_entry.get("quota_account") or task_entry.get("owner_account") or get_primary_account())
+    guard = check_task_guard(clean_task, current_account=quota_acc)
     if not guard.get("allowed"):
-        return {"success": False, "error": f"Task guard blocked execution: {guard.get('reason')}", "quota_account": quota_acc}
+        return {
+            "success": False,
+            "error": f"Task guard blocked execution: {guard.get('reason')}",
+            "quota_account": quota_acc
+        }
 
     env = get_account_environment(quota_acc)
-    cmd = custom_command
+    cmd = None
+    if platform.system().lower() == "windows" and re.fullmatch(r"[A-Za-z0-9_\-. ]+", clean_task):
+        live_tasks = discover_windows_scheduled_tasks()
+        if clean_task in live_tasks:
+            cmd = ["schtasks", "/Run", "/TN", clean_task]
+
     if not cmd:
-        proj_path = task_entry.get("project_path", "")
-        if "Samansa" in task_name and proj_path:
-            cmd = [sys.executable, os.path.join(proj_path, "daily_seo_runner.py"), "--batch-size", "30"]
-        elif "Nabi" in task_name and proj_path:
-            bat_path = os.path.join(proj_path, "run_daily_seo.bat")
-            if os.path.exists(bat_path):
-                cmd = ["cmd.exe", "/c", bat_path]
-            else:
-                cmd = [sys.executable, os.path.join(proj_path, "daily_seo_runner.py"), "--all"]
-        else:
-            return {"success": False, "error": f"No execution command configured for task '{task_name}'", "quota_account": quota_acc}
+        runner_script = task_entry.get("runner_script")
+        if runner_script:
+            runner_path = Path(str(runner_script)).resolve()
+            if runner_path.is_file() and runner_path.suffix.lower() == ".py":
+                cmd = [sys.executable, str(runner_path)]
+
+    if not cmd:
+        return {
+            "success": False,
+            "error": f"No registered scheduled task or allowlisted runner_script for '{clean_task}'",
+            "quota_account": quota_acc
+        }
 
     try:
         kwargs = {"env": env}
@@ -1342,10 +1401,10 @@ def run_guarded_task(task_name, custom_command=None):
         proc = subprocess.Popen(cmd, **kwargs)
         return {
             "success": True,
-            "task_name": task_name,
+            "task_name": clean_task,
             "pid": proc.pid,
             "quota_account": quota_acc,
-            "msg": f"تسک '{task_name}' با سهمیه اکانت '{quota_acc}' اجرا شد (PID: {proc.pid})"
+            "msg": f"تسک '{clean_task}' با سهمیه اکانت '{quota_acc}' اجرا شد (PID: {proc.pid})"
         }
     except Exception as e:
         return {"success": False, "error": str(e), "quota_account": quota_acc}
@@ -1769,6 +1828,7 @@ def _migration_publish(records, source_ids, mode, backup_path):
         raise RuntimeError((result or {}).get('error', 'Native migration commit failed') if isinstance(result, dict) else 'Native migration commit did not confirm success')
     if mode == 'move' and set(result.get('sources_archived',[])) != set(source_ids):
         raise RuntimeError('Native owner did not confirm archival of every source')
+    invalidate_migration_caches()
     return result
 
 
@@ -2068,12 +2128,50 @@ def delete_conversation(conv_id):
             conn.close()
         except Exception:
             pass
+    invalidate_migration_caches()
+
 
 def is_account2(email):
-    if not email:
-        return False
-    norm = str(email).lower().strip()
-    return norm in ('instance_2', 'secondary_account', 'bombhub.apk@gmail.com') or 'bombhub' in norm or 'account2' in norm
+    return _store.is_account2(email)
+
+
+def _run_self_tests():
+    import inspect
+    import tempfile
+    from unittest import mock
+
+    sig = inspect.signature(run_guarded_task)
+    assert list(sig.parameters.keys()) == ["task_name"], f"Unexpected params: {sig.parameters}"
+    with tempfile.TemporaryDirectory() as tmp:
+        thome = Path(tmp)
+        g_dir = thome / ".gemini"
+        a_dir = g_dir / "antigravity"
+        with mock.patch.object(Path, "home", return_value=thome), \
+             mock.patch.dict(globals(), {
+                 "GEMINI_DIR": str(g_dir),
+                 "ANTIGRAVITY_DIR": str(a_dir),
+                 "CONVERSATIONS_DIR": str(a_dir / "conversations"),
+                 "BRAIN_DIR": str(a_dir / "brain"),
+                 "ACCOUNTS_DIR": str(g_dir / "accounts"),
+                 "BACKUP_DIR": str(g_dir / "antigravity-backup"),
+                 "CONFIG_PROJECTS_DIR": str(g_dir / "config" / "projects"),
+                 "TASKS_DIR": str(a_dir / "tasks"),
+                 "SCHEDULED_DIR": str(a_dir / "scheduled"),
+                 "TASK_ISOLATION_MANIFEST_PATH": str(a_dir / "task_isolation_manifest.json"),
+                 "PROFILE_SYNC_MANIFEST_PATH": str(g_dir / "accounts" / "profile_sync_manifest.json"),
+             }):
+            invalidate_migration_caches()
+            blocked = run_guarded_task("unregistered_arbitrary_task_xyz")
+            assert blocked.get("success") is False
+            assert resolve_project("__nonexistent_project_v3__") is None
+            res_self = resolve_project(str(ROOT_DIR))
+            assert res_self is not None and set(res_self.keys()) == {"id", "name", "path", "quota_account"}
+
+    assert is_account2("instance_2") is True
+    assert is_account2("user2@example.com") in (True, False)
+    print("migration_engine self-tests passed.")
+    return 0
+
 
 if __name__ == '__main__':
     import argparse
@@ -2082,12 +2180,16 @@ if __name__ == '__main__':
     parser.add_argument('--projects', action='store_true', help='List all projects')
     parser.add_argument('--tasks', action='store_true', help='List all scheduled tasks')
     parser.add_argument('--allowed-convs', help='List allowed conversation IDs for account')
+    parser.add_argument('--resolve-project', help='Resolve project ID, name, or path')
     parser.add_argument('--check-task-guard', help='Check if task is permitted to execute')
     parser.add_argument('--run-task', help='Run scheduled task with its designated quota_account credentials')
     parser.add_argument('--account', help='Account email or instance alias to check against')
+    parser.add_argument('--test', action='store_true', help='Run self-tests')
     args = parser.parse_args()
 
-    if args.list:
+    if args.test:
+        sys.exit(_run_self_tests())
+    elif args.list:
         print(json.dumps(list_conversations(), indent=2, ensure_ascii=False))
     elif args.projects:
         print(json.dumps(list_projects(), indent=2, ensure_ascii=False))
@@ -2095,6 +2197,8 @@ if __name__ == '__main__':
         print(json.dumps(list_scheduled_tasks(), indent=2, ensure_ascii=False))
     elif args.allowed_convs:
         print(json.dumps(get_allowed_conversations(args.allowed_convs), indent=2, ensure_ascii=False))
+    elif args.resolve_project:
+        print(json.dumps(resolve_project(args.resolve_project), indent=2, ensure_ascii=False))
     elif args.check_task_guard:
         guard_res = check_task_guard(args.check_task_guard, current_account=args.account)
         print(json.dumps(guard_res, indent=2, ensure_ascii=False))

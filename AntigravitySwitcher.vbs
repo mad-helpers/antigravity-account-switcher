@@ -1,5 +1,5 @@
-' Antigravity Switcher Silent Windows Launcher
-' Author: Ethan Carter (https://github.com/Bombhub-apk/antigravity-account-switcher)
+' Antigravity Switcher Silent Windows Launcher (v3.0)
+' Organization: mad-helpers (https://github.com/mad-helpers/antigravity-account-switcher)
 Set WshShell = CreateObject("WScript.Shell")
 Set FSO = CreateObject("Scripting.FileSystemObject")
 ScriptDir = FSO.GetParentFolderName(WScript.ScriptFullName)

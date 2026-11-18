@@ -22,8 +22,23 @@ except ImportError:
     websockets = None
 
 CURRENT_DIR = Path(__file__).resolve().parent
-INJECTOR_JS_PATH = CURRENT_DIR / "chatgpt_theme_injector.js"
+if str(CURRENT_DIR) not in sys.path:
+    sys.path.insert(0, str(CURRENT_DIR))
+INJECTOR_JS_PATH = (
+    CURRENT_DIR / "chatgpt_theme_injector.js"
+    if (CURRENT_DIR / "chatgpt_theme_injector.js").exists()
+    else CURRENT_DIR.parent.parent / "chatgpt_theme_injector.js"
+)
 LOG_FILE = CURRENT_DIR / "chatgpt_cdp_daemon.log"
+
+
+def _load_cpm():
+    try:
+        from . import chatgpt_account_manager as cpm
+        return cpm
+    except ImportError:
+        import chatgpt_account_manager as cpm
+        return cpm
 
 logger = logging.getLogger("chatgpt_cdp")
 logger.setLevel(logging.INFO)
@@ -45,7 +60,7 @@ def load_injector_script():
     try:
         header = ""
         try:
-            import chatgpt_account_manager as cpm
+            cpm = _load_cpm()
             profiles = cpm.list_profiles()
             settings = cpm.load_settings()
             init_data = json.dumps({"profiles": profiles, "settings": settings}, ensure_ascii=False)
@@ -197,7 +212,7 @@ async def handle_target_ipc(ws, raw_msg):
             payload = json.loads(payload_str)
             req_id = payload.get("id")
             action = payload.get("action")
-            import chatgpt_account_manager as cpm
+            cpm = _load_cpm()
             resp = {}
 
             if action == "login":

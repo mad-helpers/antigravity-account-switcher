@@ -1,1208 +1,140 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Cross-Platform Antigravity Quota & Account Tier Engine
-Author: Madgod-xyz (https://github.com/Madgod-xyz/antigravity-account-switcher)
-Description:
-    Reads tokens from Windows Credential Manager or macOS Keychain, refreshes them if needed,
-    and fetches real-time model quotas, account subscription tiers, and user profile data.
-"""
+"""Backward-compatible quota engine shim delegating to ag_suite."""
 
-import os
-import sys
-import time
 import json
-import base64
-import platform
-import subprocess
-import urllib.request
-import urllib.parse
-import re
-import ssl
+import sys
 from pathlib import Path
 
-if hasattr(sys.stdout, 'reconfigure'):
+ROOT_DIR = Path(__file__).resolve().parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+if hasattr(sys.stdout, "reconfigure"):
     try:
-        sys.stdout.reconfigure(encoding='utf-8')
+        sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
 
-_CID_CODES = [49, 48, 55, 49, 48, 48, 54, 48, 54, 48, 53, 57, 49, 45, 116, 109, 104, 115, 115, 105, 110, 50, 104, 50, 49, 108, 99, 114, 101, 50, 51, 53, 118, 116, 111, 108, 111, 106, 104, 52, 103, 52, 48, 51, 101, 112, 46, 97, 112, 112, 115, 46, 103, 111, 111, 103, 108, 101, 117, 115, 101, 114, 99, 111, 110, 116, 101, 110, 116, 46, 99, 111, 109]
-_SEC_CODES = [71, 79, 67, 83, 80, 88, 45, 75, 53, 56, 70, 87, 82, 52, 56, 54, 76, 100, 76, 74, 49, 109, 76, 66, 56, 115, 88, 67, 52, 122, 54, 113, 68, 65, 102]
-OAUTH_CLIENT_ID = "".join(chr(x) for x in _CID_CODES)
-OAUTH_CLIENT_SECRET = "".join(chr(x) for x in _SEC_CODES)
+from ag_suite import VERSION  # noqa: F401
+from ag_suite.cdp import (  # noqa: F401
+    check_local_http_request,
+    discover_live_cdp_ports,
+    get_devtools_targets,
+    heal_devtools_port_file,
+    is_antigravity_workbench_target,
+    is_port_open,
+    is_valid_cdp_port,
+    select_workbench_target,
+)
+from ag_suite.quota import (  # noqa: F401
+    ORDERED_POOLS,
+    _build_quota_pools,
+    _manifest_fallback_quota,
+    call_ls_rpc,
+    diagnose_suite,
+    discover_language_server,
+    fetch_quota,
+    fetch_quota_and_tier,
+    fetch_quota_from_language_server,
+    format_countdown,
+    get_live_ide_auth_state,
+    invalidate_ls_cache,
+)
+from ag_suite.store import (  # noqa: F401
+    DEFAULT_USER_SETTINGS,
+    load_manifest,
+    load_user_settings,
+    resolve_account_key,
+    resolve_font_asset,
+    rotate_log_if_needed,
+    sanitize_manifest_for_client,
+    save_manifest,
+    save_user_settings,
+)
+from ag_suite.vault import (  # noqa: F401
+    ANTIGRAVITY_OAUTH_SCOPES,
+    CREDENTIAL_TARGETS,
+    OAUTH_CLIENT_ID,
+    OAUTH_CLIENT_SECRET,
+    check_token_has_aicode,
+    clear_keychain_token,
+    decode_token_dict,
+    delete_keychain_tokens,
+    ensure_fresh_token,
+    extract_token_email,
+    get_current_system,
+    get_keychain_token,
+    get_platform_paths,
+    get_windows_credential,
+    normalize_token_payload,
+    parse_token_payload,
+    write_keychain_token,
+)
 
-def get_current_system():
-    sys_name = platform.system().lower()
-    if "darwin" in sys_name:
-        return "macos"
-    elif "windows" in sys_name:
-        return "windows"
-    return "linux"
 
-def get_windows_credential():
-    """Read credential from Windows Credential Manager via advapi32.dll."""
-    import ctypes
-    from ctypes import wintypes
+def _run_self_tests() -> int:
+    import base64
+    import tempfile
 
-    class CREDENTIAL(ctypes.Structure):
-        _fields_ = [
-            ('Flags', wintypes.DWORD),
-            ('Type', wintypes.DWORD),
-            ('TargetName', wintypes.LPWSTR),
-            ('Comment', wintypes.LPWSTR),
-            ('LastWritten', wintypes.FILETIME),
-            ('CredentialBlobSize', wintypes.DWORD),
-            ('CredentialBlob', ctypes.POINTER(ctypes.c_byte)),
-            ('Persist', wintypes.DWORD),
-            ('AttributeCount', wintypes.DWORD),
-            ('Attributes', ctypes.c_void_p),
-            ('TargetAlias', wintypes.LPWSTR),
-            ('UserName', wintypes.LPWSTR),
-        ]
+    raw_json = json.dumps({"token": {"access_token": "ya29.test", "refresh_token": "1//rt"}, "id_token_email": "User@Example.COM"})
+    b64_tok = "go-keyring-base64:" + base64.b64encode(raw_json.encode("utf-8")).decode("ascii")
+    assert parse_token_payload(raw_json) == ("ya29.test", "1//rt")
+    assert parse_token_payload(b64_tok) == ("ya29.test", "1//rt")
+    assert parse_token_payload("ya29.bare") == ("ya29.bare", None)
+    assert extract_token_email(b64_tok, check_manifest=False) == "user@example.com"
 
-    PCREDENTIAL = ctypes.POINTER(CREDENTIAL)
-    CredRead = ctypes.windll.advapi32.CredReadW
-    CredRead.argtypes = [wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.POINTER(PCREDENTIAL)]
-    CredRead.restype = wintypes.BOOL
-    CredFree = ctypes.windll.advapi32.CredFree
-    CredFree.argtypes = [ctypes.c_void_p]
-
-    targets = ['gemini:antigravity', 'gemini', 'antigravity']
-    for target in targets:
-        pcred = PCREDENTIAL()
-        if CredRead(target, 1, 0, ctypes.byref(pcred)):
-            try:
-                cred = pcred.contents
-                raw_bytes = bytes(cred.CredentialBlob[:cred.CredentialBlobSize])
-                val = raw_bytes.decode('utf-8', errors='ignore')
-                if val.startswith('go-keyring-base64:'):
-                    return val
-                # Fallback utf-16
-                try:
-                    val_u16 = raw_bytes.decode('utf-16le', errors='ignore')
-                    if val_u16.startswith('go-keyring-base64:'):
-                        return val_u16
-                except Exception:
-                    pass
-                return val
-            finally:
-                CredFree(pcred)
-    return None
-
-def get_keychain_token():
-    system = get_current_system()
-    if system == "macos":
-        try:
-            cmd = ["security", "find-generic-password", "-s", "gemini", "-a", "antigravity", "-w"]
-            res = subprocess.run(cmd, capture_output=True, text=True)
-            if res.returncode == 0 and res.stdout.strip():
-                return res.stdout.strip()
-            # Fallback
-            cmd2 = ["security", "find-generic-password", "-s", "antigravity", "-w"]
-            res2 = subprocess.run(cmd2, capture_output=True, text=True)
-            if res2.returncode == 0 and res2.stdout.strip():
-                return res2.stdout.strip()
-        except Exception:
-            pass
-    elif system == "windows":
-        return get_windows_credential()
-    return None
-
-def format_countdown(iso_str):
-    if not iso_str:
-        return "N/A", "N/A", 0
-    try:
-        import datetime
-        if isinstance(iso_str, dict) and 'seconds' in iso_str:
-            secs_ts = int(iso_str['seconds'])
-            dt = datetime.datetime.fromtimestamp(secs_ts, tz=datetime.timezone.utc)
-        elif isinstance(iso_str, (int, float)):
-            dt = datetime.datetime.fromtimestamp(int(iso_str), tz=datetime.timezone.utc)
-        elif isinstance(iso_str, str):
-            if iso_str.isdigit():
-                dt = datetime.datetime.fromtimestamp(int(iso_str), tz=datetime.timezone.utc)
-            else:
-                dt = datetime.datetime.fromisoformat(iso_str.replace('Z', '+00:00'))
-        else:
-            return "N/A", "N/A", 0
-        now = datetime.datetime.now(datetime.timezone.utc)
-        diff = dt - now
-        secs = int(diff.total_seconds())
-        local_time = dt.astimezone().strftime('%I:%M %p')
-        if secs <= 0:
-            return "Ready", local_time, 0
-        d = secs // 86400
-        h = (secs % 86400) // 3600
-        m = (secs % 3600) // 60
-        parts = []
-        if d > 0:
-            parts.append(f"{d} d")
-        if h > 0:
-            parts.append(f"{h} hr")
-        if (m > 0 and d == 0) or (d == 0 and h == 0):
-            parts.append(f"{m} min")
-        return " ".join(parts), local_time, secs
-    except Exception:
-        return "N/A", "N/A", 0
-
-def parse_token_payload(token_str):
-    """Safely extract access_token and refresh_token from either raw JSON or go-keyring-base64."""
-    if not token_str:
-        return None, None
-    token_str = token_str.strip()
-    try:
-        # 1. Check if direct JSON
-        if token_str.startswith('{'):
-            data = json.loads(token_str)
-            t_obj = data.get('token', data)
-            return t_obj.get('access_token'), t_obj.get('refresh_token')
-        # 2. Check if go-keyring-base64: prefix
-        if 'go-keyring-base64:' in token_str:
-            raw_b64 = token_str.split('go-keyring-base64:', 1)[1]
-            data = json.loads(base64.b64decode(raw_b64).decode('utf-8'))
-            t_obj = data.get('token', data)
-            return t_obj.get('access_token'), t_obj.get('refresh_token')
-        # 3. Fallback raw base64
-        try:
-            data = json.loads(base64.b64decode(token_str).decode('utf-8'))
-            t_obj = data.get('token', data)
-            return t_obj.get('access_token'), t_obj.get('refresh_token')
-        except Exception:
-            pass
-    except Exception:
-        pass
-    return None, None
-
-def extract_token_email(token_data):
-    """Safely extract account email from id_token claims in raw JSON, go-keyring-base64, or dict."""
-    if not token_data:
-        return None
-    try:
-        data = None
-        if isinstance(token_data, dict):
-            data = token_data
-        elif isinstance(token_data, str):
-            tok_s = token_data.strip()
-            if tok_s.startswith('{'):
-                data = json.loads(tok_s)
-            elif 'go-keyring-base64:' in tok_s:
-                raw_b64 = tok_s.split('go-keyring-base64:', 1)[1]
-                data = json.loads(base64.b64decode(raw_b64).decode('utf-8'))
-            else:
-                try:
-                    data = json.loads(base64.b64decode(tok_s).decode('utf-8'))
-                except Exception:
-                    pass
-        if not data or not isinstance(data, dict):
-            return None
-
-        # 1. Check id_token JWT
-        id_tok = data.get('id_token')
-        if id_tok and isinstance(id_tok, str) and '.' in id_tok:
-            parts = id_tok.split('.')
-            if len(parts) >= 2:
-                p = parts[1] + '=' * (-len(parts[1]) % 4)
-                claims = json.loads(base64.urlsafe_b64decode(p).decode('utf-8', errors='ignore'))
-                email = claims.get('email')
-                if email and '@' in email:
-                    return str(email).lower().strip()
-
-        # 2. Check token object or claims
-        t_obj = data.get('token', data)
-        if isinstance(t_obj, dict):
-            em = t_obj.get('email')
-            if em and '@' in em:
-                return str(em).lower().strip()
-    except Exception:
-        pass
-    return None
-
-def check_token_has_aicode(token_data):
-    """Checks if token data contains Google Cloud aicode scopes or valid OAuth tokens."""
-    if not token_data:
-        return False
-    try:
-        if isinstance(token_data, dict):
-            s = json.dumps(token_data)
-        else:
-            s = str(token_data)
-        if 'aicode' in s:
-            return True
-        if 'access_token' in s or 'refresh_token' in s:
-            return True
-    except Exception:
-        pass
-    return False
-
-def ensure_fresh_token(token_data, account_email=None, force_refresh=False):
-    """
-    Checks if an OAuth token is expired or close to expiring (< 5 mins).
-    If expired/near expiry or force_refresh is True, refreshes it using Google's token endpoint,
-    updates the dictionary / JSON string, saves it to disk at
-    ~/.gemini/accounts/<account_email>.token if applicable, and returns the fresh JSON string.
-    """
-    if not token_data:
-        return None
-
-    parsed = None
-    is_json_str = False
-    if isinstance(token_data, dict):
-        parsed = dict(token_data)
-    elif isinstance(token_data, str):
-        token_str_clean = token_data.strip()
-        if token_str_clean.startswith('{'):
-            try:
-                parsed = json.loads(token_str_clean)
-                is_json_str = True
-            except Exception:
-                pass
-
-    if not parsed:
-        return token_data
-
-    t_obj = parsed.get('token', parsed)
-    expiry_str = t_obj.get('expiry', '')
-    refresh_token = t_obj.get('refresh_token')
-
-    if not refresh_token:
-        return json.dumps(parsed, ensure_ascii=False) if is_json_str else parsed
-
-    needs_refresh = bool(force_refresh)
-    if not needs_refresh:
-        if expiry_str:
-            try:
-                import datetime
-                clean_exp = expiry_str.replace('Z', '+00:00')
-                if '.' in clean_exp:
-                    parts = clean_exp.split('.')
-                    tz_part = ''
-                    if '+' in parts[1]:
-                        sub_parts = parts[1].split('+')
-                        parts[1] = sub_parts[0][:6]
-                        tz_part = '+' + sub_parts[1]
-                    elif '-' in parts[1]:
-                        sub_parts = parts[1].split('-')
-                        parts[1] = sub_parts[0][:6]
-                        tz_part = '-' + sub_parts[1]
-                    else:
-                        parts[1] = parts[1][:6]
-                    clean_exp = parts[0] + '.' + parts[1] + tz_part
-                exp_dt = datetime.datetime.fromisoformat(clean_exp)
-                now_dt = datetime.datetime.now(datetime.timezone.utc)
-                if (exp_dt - now_dt).total_seconds() < 300:
-                    needs_refresh = True
-            except Exception:
-                needs_refresh = True
-        else:
-            needs_refresh = True
-
-    if needs_refresh:
-        try:
-            import datetime
-            params = urllib.parse.urlencode({
-                'client_id': OAUTH_CLIENT_ID,
-                'client_secret': OAUTH_CLIENT_SECRET,
-                'grant_type': 'refresh_token',
-                'refresh_token': refresh_token
-            }).encode('utf-8')
-            req = urllib.request.Request('https://oauth2.googleapis.com/token', data=params)
-            with urllib.request.urlopen(req, timeout=7.0) as resp:
-                tok_data = json.loads(resp.read().decode('utf-8'))
-                if tok_data.get('access_token'):
-                    t_obj['access_token'] = tok_data['access_token']
-                    exp_sec = tok_data.get('expires_in', 3600)
-                    now_utc = datetime.datetime.now(datetime.timezone.utc)
-                    new_exp = now_utc + datetime.timedelta(seconds=exp_sec)
-                    t_obj['expiry'] = new_exp.isoformat()
-                    if 'id_token' in tok_data:
-                        parsed['id_token'] = tok_data['id_token']
-                    if 'token' in parsed:
-                        parsed['token'] = t_obj
-                    else:
-                        parsed.update(t_obj)
-
-                    tok_claimed_email = extract_token_email(parsed)
-                    acc_email = account_email
-                    if not acc_email:
-                        acc_email = tok_claimed_email
-                    elif tok_claimed_email and acc_email.lower().strip() != tok_claimed_email.lower().strip():
-                        # Prevent cross-account token pollution
-                        acc_email = None
-
-                    if acc_email:
-                        safe_acc = "".join(c if c.isalnum() or c in ('@', '.', '_', '-') else '_' for c in acc_email)
-                        tf = os.path.expanduser(f"~/.gemini/accounts/{safe_acc}.token")
-                        try:
-                            os.makedirs(os.path.dirname(tf), exist_ok=True)
-                            with open(tf, 'w', encoding='utf-8') as f:
-                                json.dump(parsed, f, indent=2, ensure_ascii=False)
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-
-    return json.dumps(parsed, ensure_ascii=False) if (is_json_str or isinstance(token_data, str)) else parsed
-
-def discover_language_server(instance_id=None):
-    """
-    Auto-discovers the local Language Server HTTPS port and CSRF token
-    used by the running Google Antigravity desktop editor.
-    """
-    ctx = ssl._create_unverified_context()
-    sys_name = get_current_system()
-    home = Path.home()
-    dt_candidates = []
-
-    inst_suffix = ""
-    if instance_id and str(instance_id).strip() not in ("instance_1", "default", ""):
-        clean_inst = str(instance_id).replace("_", "-").title().replace("-", "")
-        inst_suffix = f"-{clean_inst}"
-
-    if sys_name == "windows":
-        appdata = Path(os.getenv("APPDATA", str(home / "AppData" / "Roaming")))
-        dt_candidates.append(appdata / f"Antigravity{inst_suffix}" / "DevToolsActivePort")
-        if inst_suffix:
-            dt_candidates.append(appdata / "Antigravity" / "DevToolsActivePort")
-    elif sys_name == "macos":
-        dt_candidates.append(home / "Library" / "Application Support" / f"Antigravity{inst_suffix}" / "DevToolsActivePort")
-        if inst_suffix:
-            dt_candidates.append(home / "Library" / "Application Support" / "Antigravity" / "DevToolsActivePort")
-    else:
-        dt_candidates.append(home / ".config" / f"Antigravity{inst_suffix}" / "DevToolsActivePort")
-        if inst_suffix:
-            dt_candidates.append(home / ".config" / "Antigravity" / "DevToolsActivePort")
-
-    for dt_path in dt_candidates:
-        if dt_path.exists():
-            try:
-                with open(dt_path, "r", encoding="utf-8") as f:
-                    cdp_port = int(f.readline().strip())
-
-                req = urllib.request.Request(f"http://127.0.0.1:{cdp_port}/json")
-                with urllib.request.urlopen(req, timeout=1.5) as r:
-                    targets = json.loads(r.read().decode("utf-8"))
-
-                ls_port = None
-                for t in targets:
-                    url = t.get("url", "")
-                    m = re.search(r"https?://127\.0\.0\.1:(\d+)", url)
-                    if m:
-                        ls_port = int(m.group(1))
-                        break
-                if ls_port:
-                    with urllib.request.urlopen(f"https://127.0.0.1:{ls_port}/", context=ctx, timeout=2.0) as r:
-                        html = r.read().decode("utf-8", errors="ignore")
-                    m_csrf = re.search(r'"csrfToken":\s*"([^"]+)"', html)
-                    csrf = m_csrf.group(1) if m_csrf else None
-                    if csrf:
-                        return ls_port, csrf
-            except Exception:
-                pass
-
-    # Secondary fallback: inspect running processes for language_server
-    try:
-        if sys_name == "windows":
-            cmd = ['powershell', '-NoProfile', '-Command',
-                   "Get-CimInstance Win32_Process -Filter \"Name LIKE 'language_server%'\" | Select-Object -ExpandProperty CommandLine"]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=3.0)
-            if res.returncode == 0 and res.stdout:
-                m_tok = re.search(r'--csrf_token\s+([a-zA-Z0-9-]+)', res.stdout)
-                csrf_found = m_tok.group(1) if m_tok else None
-                if csrf_found:
-                    cmd_net = ['powershell', '-NoProfile', '-Command',
-                               "Get-NetTCPConnection -State Listen | Where-Object { $_.LocalAddress -eq '127.0.0.1' } | Select-Object -ExpandProperty LocalPort"]
-                    res_net = subprocess.run(cmd_net, capture_output=True, text=True, timeout=3.0)
-                    if res_net.returncode == 0 and res_net.stdout:
-                        ports = [int(p.strip()) for p in res_net.stdout.split() if p.strip().isdigit()]
-                        for p in ports:
-                            if p > 40000:
-                                try:
-                                    test_req = urllib.request.Request(
-                                        f"https://127.0.0.1:{p}/exa.language_server_pb.LanguageServerService/GetServerConfiguration",
-                                        headers={
-                                            'Content-Type': 'application/json',
-                                            'Connect-Protocol-Version': '1',
-                                            'x-codeium-csrf-token': csrf_found
-                                        },
-                                        data=b'{}'
-                                    )
-                                    with urllib.request.urlopen(test_req, context=ctx, timeout=0.8) as test_resp:
-                                        if test_resp.status == 200:
-                                            return p, csrf_found
-                                except Exception:
-                                    pass
-    except Exception:
-        pass
-
-    return None, None
-
-def call_ls_rpc(ls_port, csrf, method, payload=None, timeout=3.5):
-    if payload is None:
-        payload = {}
-    ctx = ssl._create_unverified_context()
-    url = f"https://127.0.0.1:{ls_port}/exa.language_server_pb.LanguageServerService/{method}"
-    headers = {
-        'Content-Type': 'application/json',
-        'Connect-Protocol-Version': '1',
-        'x-codeium-csrf-token': csrf,
-        'User-Agent': 'antigravity'
+    groups = [{"buckets": [
+        {"bucketId": "gemini-5h", "remainingFraction": 0.85},
+        {"bucketId": "gemini-weekly", "remainingFraction": 0.90},
+        {"bucketId": "3p-5h", "remainingFraction": 0.70},
+        {"bucketId": "3p-weekly", "remainingFraction": 0.75},
+    ]}]
+    models = {
+        "gemini-pro-orchestrator-g1-pro": {"quotaInfo": {"remainingFraction": 0.85}},
+        "claude-opus-5-5": {"quotaInfo": {"remainingFraction": 0.70}},
+        "gpt-oss-120b": {"quotaInfo": {"remainingFraction": 0.70}},
     }
-    data = json.dumps(payload).encode('utf-8')
-    req = urllib.request.Request(url, headers=headers, data=data)
-    with urllib.request.urlopen(req, context=ctx, timeout=timeout) as r:
-        return json.loads(r.read().decode('utf-8'))
-
-def fetch_quota_from_language_server(instance_id=None):
-    """
-    Fetches 100% accurate, live quota and tier status directly from
-    the running local Antigravity Language Server via Connect-RPC.
-    """
-    ls_port, csrf = discover_language_server(instance_id=instance_id)
-    if not ls_port or not csrf:
-        return None
-    try:
-        user_status_data = call_ls_rpc(ls_port, csrf, 'GetUserStatus')
-        quota_summary_data = call_ls_rpc(ls_port, csrf, 'RetrieveUserQuotaSummary')
-        models_data = call_ls_rpc(ls_port, csrf, 'GetAvailableModels')
-        code_assist_data = call_ls_rpc(ls_port, csrf, 'GetLoadCodeAssist')
-
-        user_status = (user_status_data or {}).get('userStatus', {})
-        email = user_status.get('email')
-        user_name = user_status.get('name')
-        avatar_url = user_status.get('profilePictureUrl', '')
-
-        tier_obj = user_status.get('userTier', {})
-        tier_name = tier_obj.get('name') or 'Google AI Pro'
-        if not tier_name or tier_name == 'Antigravity':
-            resp = (code_assist_data or {}).get('response', {})
-            paid_tier = resp.get('paidTier', {}).get('name')
-            if paid_tier:
-                tier_name = paid_tier
-
-        tier_code = 'pro'
-        if 'ultra' in tier_name.lower():
-            tier_code = 'ultra'
-        elif 'free' in tier_name.lower():
-            tier_code = 'free'
-        elif 'enterprise' in tier_name.lower():
-            tier_code = 'enterprise'
-
-        clean_name = "User"
-        if email and '@' in email:
-            clean_name = email.split('@')[0].split('.')[0].capitalize()
-        elif user_name:
-            clean_name = user_name.split()[0].capitalize()
-
-        summary_resp = (quota_summary_data or {}).get('response', {})
-        groups = summary_resp.get('groups', [])
-
-        gemini_w_bucket = None
-        gemini_5h_bucket = None
-        p3_w_bucket = None
-        p3_5h_bucket = None
-        argon_w_bucket = None
-        argon_5h_bucket = None
-
-        for g in groups:
-            for b in g.get('buckets', []):
-                bid = b.get('bucketId', '')
-                if bid == 'gemini-weekly':
-                    gemini_w_bucket = b
-                elif bid == 'gemini-5h':
-                    gemini_5h_bucket = b
-                elif bid == '3p-weekly':
-                    p3_w_bucket = b
-                elif bid == '3p-5h':
-                    p3_5h_bucket = b
-                elif 'argon' in bid.lower() or 'argon' in g.get('displayName', '').lower():
-                    if 'weekly' in bid.lower() or 'wtu' in bid.lower():
-                        argon_w_bucket = b
-                    elif '5h' in bid.lower():
-                        argon_5h_bucket = b
-
-        def _get_rem(b):
-            if not b:
-                return 1.0
-            rem = b.get('remainingFraction')
-            if rem is None and isinstance(b.get('remaining'), dict):
-                rem = b.get('remaining', {}).get('value')
-            try:
-                return float(rem) if rem is not None else 1.0
-            except Exception:
-                return 1.0
-
-        gw_rem = _get_rem(gemini_w_bucket)
-        g5_rem = _get_rem(gemini_5h_bucket)
-        p3w_rem = _get_rem(p3_w_bucket)
-        p35_rem = _get_rem(p3_5h_bucket)
-        argon_w_rem = _get_rem(argon_w_bucket) if argon_w_bucket else 0.0
-        argon_5h_rem = _get_rem(argon_5h_bucket) if argon_5h_bucket else argon_w_rem
-
-        gw_reset = gemini_w_bucket.get('resetTime') if gemini_w_bucket else None
-        g5_reset = gemini_5h_bucket.get('resetTime') if gemini_5h_bucket else None
-        p3w_reset = p3_w_bucket.get('resetTime') if p3_w_bucket else None
-        p35_reset = p3_5h_bucket.get('resetTime') if p3_5h_bucket else None
-        argon_w_reset = argon_w_bucket.get('resetTime') if argon_w_bucket else None
-        argon_5h_reset = argon_5h_bucket.get('resetTime') if argon_5h_bucket else argon_w_reset
-
-        gw_cd, gw_lr, gw_sec = format_countdown(gw_reset)
-        g5_cd, g5_lr, g5_sec = format_countdown(g5_reset)
-        p3w_cd, p3w_lr, p3w_sec = format_countdown(p3w_reset)
-        p35_cd, p35_lr, p35_sec = format_countdown(p35_reset)
-        argon_w_cd, argon_w_lr, argon_w_sec = format_countdown(argon_w_reset)
-        argon_5h_cd, argon_5h_lr, argon_5h_sec = format_countdown(argon_5h_reset)
-
-        models = (models_data or {}).get('response', {}).get('models', {})
-        pools_map = {}
-        for m_id, m_info in models.items():
-            quota = m_info.get('quotaInfo')
-            if not quota:
-                continue
-            rem = quota.get('remainingFraction', 1.0)
-            reset_time = quota.get('resetTime')
-            disp = m_info.get('displayName', m_id)
-
-            if 'argon' in m_id.lower() or 'argon' in str(disp).lower():
-                cat = 'Argon'
-            elif 'claude' in m_id.lower() or 'claude' in str(disp).lower():
-                cat = 'Claude Sonnet 4.6'
-            elif 'gpt' in m_id.lower():
-                cat = 'GPT-OSS 120B'
-            elif 'flash' in m_id.lower():
-                cat = 'Gemini 3.8 Flash High'
-            elif 'pro' in m_id.lower():
-                cat = 'Gemini 3.1 Pro'
-            else:
-                cat = 'Gemini Models'
-
-            if cat not in pools_map:
-                pools_map[cat] = {'rem': rem, 'reset_time': reset_time, 'display': disp}
-            elif rem < pools_map[cat]['rem']:
-                pools_map[cat]['rem'] = rem
-                if reset_time:
-                    pools_map[cat]['reset_time'] = reset_time
-
-        ordered = ['Gemini 3.8 Flash High', 'Gemini 3.1 Pro', 'Argon', 'Claude Sonnet 4.6', 'GPT-OSS 120B']
-        pools = []
-        for c in ordered:
-            is_claude_gpt = ('Claude' in c or 'GPT' in c)
-            is_argon = ('Argon' in c)
-
-            if is_claude_gpt:
-                base_rem = p35_rem
-                base_reset = p35_reset
-                base_cd = p35_cd
-                base_lr = p35_lr
-                base_sec = p35_sec
-                w_rem = p3w_rem
-                w_cd = p3w_cd
-            elif is_argon:
-                base_rem = argon_5h_rem
-                base_reset = argon_5h_reset
-                base_cd = argon_5h_cd
-                base_lr = argon_5h_lr
-                base_sec = argon_5h_sec
-                w_rem = argon_w_rem
-                w_cd = argon_w_cd
-            else:
-                base_rem = g5_rem
-                base_reset = g5_reset
-                base_cd = g5_cd
-                base_lr = g5_lr
-                base_sec = g5_sec
-                w_rem = gw_rem
-                w_cd = gw_cd
-
-            if c in pools_map and not is_argon:
-                p = pools_map[c]
-                if p['rem'] < base_rem:
-                    base_rem = p['rem']
-                    if p['reset_time']:
-                        base_reset = p['reset_time']
-                        base_cd, base_lr, base_sec = format_countdown(base_reset)
-
-            used_pct = round((1.0 - base_rem) * 100, 1)
-            rem_pct = round(base_rem * 100, 1)
-            pools.append({
-                'name': c,
-                'used_pct': used_pct,
-                'remaining_pct': rem_pct,
-                'resets_in': base_cd,
-                'reset_time': base_lr,
-                'reset_secs': base_sec,
-                'reset_iso': str(base_reset) if base_reset else '',
-                'weekly_rem': round(w_rem * 100, 1),
-                'weekly_pct': round((1.0 - w_rem) * 100, 1),
-                'weekly_resets': w_cd
-            })
-
-        primary_session = {
-            'name': '5-Hour Limit',
-            'used_pct': round((1.0 - g5_rem) * 100, 1),
-            'remaining_pct': round(g5_rem * 100, 1),
-            'resets_in': g5_cd,
-            'reset_time': g5_lr,
-            'reset_secs': g5_sec,
-            'reset_iso': str(g5_reset) if g5_reset else ''
-        }
-
-        weekly_payload = {
-            'name': 'Weekly Limit',
-            'used_pct': round((1.0 - gw_rem) * 100, 1),
-            'remaining_pct': round(gw_rem * 100, 1),
-            'resets_in': gw_cd,
-            'reset_time': gw_lr,
-            'reset_secs': gw_sec,
-            'reset_iso': str(gw_reset) if gw_reset else ''
-        }
-
-        res_payload = {
-            'email': email or 'Unknown',
-            'name': clean_name,
-            'avatar': avatar_url or '',
-            'tier': tier_name,
-            'tier_code': tier_code,
-            'session': primary_session,
-            'weekly': weekly_payload,
-            'pools': pools
-        }
-
-        # Persist to active_quota.json
-        try:
-            aq_path = Path.home() / ".gemini" / "antigravity" / "active_quota.json"
-            aq_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(aq_path, "w", encoding="utf-8") as f:
-                json.dump(res_payload, f, indent=2, ensure_ascii=False)
-        except Exception:
-            pass
-
-        # Update manifest for this email if present
-        if email:
-            try:
-                man_path = Path.home() / ".gemini" / "accounts" / "manifest.json"
-                if man_path.exists():
-                    with open(man_path, "r", encoding="utf-8") as mf:
-                        m_data = json.load(mf)
-                    if email in m_data:
-                        m_data[email]['remaining_pct'] = primary_session['remaining_pct']
-                        m_data[email]['weekly_remaining_pct'] = weekly_payload['remaining_pct']
-                        m_data[email]['weekly_resets_in'] = weekly_payload['resets_in']
-                        m_data[email]['tier'] = tier_name
-                        m_data[email]['tier_code'] = tier_code
-                        with open(man_path, "w", encoding="utf-8") as mf:
-                            json.dump(m_data, mf, indent=2, ensure_ascii=False)
-            except Exception:
-                pass
-
-        return res_payload
-    except Exception:
-        return None
-
-_QUOTA_CACHE = {}
-_CACHE_TTL = 30  # seconds
-
-def fetch_quota_and_tier(token_str=None, force_refresh=False):
-    """
-    Fetch comprehensive account details: email, subscription tier, model quotas, and countdowns.
-    Prefers live Connect-RPC query to local Antigravity Language Server when available.
-    Falls back gracefully to manifest cache or OAuth refresh if editor is offline.
-    """
-    global _QUOTA_CACHE
-    now = time.time()
-    token_claim = extract_token_email(token_str) if token_str else None
-    cache_key = token_claim.lower().strip() if token_claim else 'default'
-
-    if not force_refresh and cache_key in _QUOTA_CACHE:
-        entry = _QUOTA_CACHE[cache_key]
-        if now - entry.get('time', 0) < _CACHE_TTL:
-            return dict(entry['data'])
-
-    # 1. Primary Strategy: Try local Antigravity Language Server (100% accurate, live)
-    ls_quota = None
-    try:
-        ls_quota = fetch_quota_from_language_server()
-    except Exception:
-        pass
-
-    if ls_quota and ls_quota.get('email'):
-        ls_email = str(ls_quota['email']).lower().strip()
-        # If token_str was not specified, or matches the active Language Server account:
-        if not token_claim or (token_claim.lower().strip() == ls_email):
-            _QUOTA_CACHE[ls_email] = {'data': ls_quota, 'time': now}
-            _QUOTA_CACHE['default'] = {'data': ls_quota, 'time': now}
-            return dict(ls_quota)
-
-    # 2. Secondary Strategy: If querying an inactive account or Language Server is not running
-    if token_claim:
-        try:
-            man_path = Path.home() / ".gemini" / "accounts" / "manifest.json"
-            if man_path.exists():
-                with open(man_path, "r", encoding="utf-8") as mf:
-                    m_data = json.load(mf)
-                if token_claim in m_data:
-                    m_entry = m_data[token_claim]
-                    rem = float(m_entry.get('remaining_pct', 100.0))
-                    w_rem = float(m_entry.get('weekly_remaining_pct', 100.0))
-                    w_res = m_entry.get('weekly_resets_in', 'Ready')
-                    fallback_data = {
-                        'email': token_claim,
-                        'name': m_entry.get('name') or token_claim.split('@')[0].capitalize(),
-                        'avatar': m_entry.get('avatar', ''),
-                        'tier': m_entry.get('tier', 'Google AI Pro'),
-                        'tier_code': m_entry.get('tier_code', 'pro'),
-                        'session': {
-                            'name': '5-Hour Limit',
-                            'used_pct': round(100.0 - rem, 1),
-                            'remaining_pct': rem,
-                            'resets_in': 'Ready',
-                            'reset_time': 'Ready',
-                            'reset_secs': 0,
-                            'reset_iso': ''
-                        },
-                        'weekly': {
-                            'name': 'Weekly Limit',
-                            'used_pct': round(100.0 - w_rem, 1),
-                            'remaining_pct': w_rem,
-                            'resets_in': w_res,
-                            'reset_time': 'Ready',
-                            'reset_secs': 0,
-                            'reset_iso': ''
-                        },
-                        'pools': [
-                            {'name': 'Gemini 3.8 Flash High', 'used_pct': round(100.0 - rem, 1), 'remaining_pct': rem, 'resets_in': 'Ready', 'reset_time': 'Ready', 'reset_secs': 0, 'weekly_rem': w_rem, 'weekly_pct': round(100.0 - w_rem, 1), 'weekly_resets': w_res},
-                            {'name': 'Gemini 3.1 Pro', 'used_pct': round(100.0 - rem, 1), 'remaining_pct': rem, 'resets_in': 'Ready', 'reset_time': 'Ready', 'reset_secs': 0, 'weekly_rem': w_rem, 'weekly_pct': round(100.0 - w_rem, 1), 'weekly_resets': w_res},
-                            {'name': 'Argon', 'used_pct': 100.0, 'remaining_pct': 0.0, 'resets_in': '4 d', 'reset_time': 'Ready', 'reset_secs': 0, 'weekly_rem': 0.0, 'weekly_pct': 100.0, 'weekly_resets': '4 d'},
-                            {'name': 'Claude Sonnet 4.6', 'used_pct': 0.0, 'remaining_pct': 100.0, 'resets_in': 'Ready', 'reset_time': 'Ready', 'reset_secs': 0, 'weekly_rem': 100.0, 'weekly_pct': 0.0, 'weekly_resets': 'Ready'},
-                            {'name': 'GPT-OSS 120B', 'used_pct': 0.0, 'remaining_pct': 100.0, 'resets_in': 'Ready', 'reset_time': 'Ready', 'reset_secs': 0, 'weekly_rem': 100.0, 'weekly_pct': 0.0, 'weekly_resets': 'Ready'}
-                        ]
-                    }
-                    _QUOTA_CACHE[token_claim.lower().strip()] = {'data': fallback_data, 'time': now}
-                    return fallback_data
-        except Exception:
-            pass
-
-    if not token_str:
-        token_str = get_keychain_token()
-    if not token_str:
-        return dict(_QUOTA_CACHE[cache_key]['data']) if cache_key in _QUOTA_CACHE else None
-
-    access_token, refresh_token = parse_token_payload(token_str)
-    if not access_token:
-        return dict(_QUOTA_CACHE[cache_key]['data']) if cache_key in _QUOTA_CACHE else None
-
-    try:
-        models_data = None
-        for attempt in range(3):
-            try:
-                req = urllib.request.Request(
-                    'https://daily-cloudcode-pa.googleapis.com/v1internal:fetchAvailableModels',
-                    headers={
-                        'Authorization': f'Bearer {access_token}',
-                        'Content-Type': 'application/json',
-                        'User-Agent': 'antigravity'
-                    },
-                    data=b'{}'
-                )
-                with urllib.request.urlopen(req, timeout=5.0) as resp:
-                    models_data = json.loads(resp.read().decode('utf-8'))
-                if models_data and 'models' in models_data:
-                    break
-            except Exception:
-                if refresh_token:
-                    try:
-                        params = urllib.parse.urlencode({
-                            'client_id': OAUTH_CLIENT_ID,
-                            'client_secret': OAUTH_CLIENT_SECRET,
-                            'grant_type': 'refresh_token',
-                            'refresh_token': refresh_token
-                        }).encode('utf-8')
-                        req_rf = urllib.request.Request('https://oauth2.googleapis.com/token', data=params)
-                        with urllib.request.urlopen(req_rf, timeout=5.0) as r:
-                            tok_d = json.loads(r.read().decode('utf-8'))
-                            new_tok = tok_d.get('access_token')
-                            if new_tok:
-                                access_token = new_tok
-                                if token_str and token_str.startswith('{'):
-                                    try:
-                                        import datetime
-                                        tj = json.loads(token_str)
-                                        t_target = tj.get('token', tj)
-                                        t_target['access_token'] = new_tok
-                                        exp_sec = tok_d.get('expires_in', 3600)
-                                        t_target['expiry'] = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=exp_sec)).isoformat()
-                                        if 'id_token' in tok_d:
-                                            tj['id_token'] = tok_d['id_token']
-                                        token_str = json.dumps(tj)
-                                    except Exception:
-                                        pass
-                    except Exception:
-                        pass
-                time.sleep(0.5)
-
-        if not models_data:
-            return dict(_QUOTA_CACHE) if _QUOTA_CACHE else None
-
-        # Decode id_token JWT early if available to extract email, name, picture
-        id_claims = {}
-        if token_str:
-            try:
-                t_json = json.loads(token_str) if token_str.startswith('{') else {}
-                id_tok = t_json.get('id_token')
-                if id_tok and '.' in id_tok:
-                    payload_part = id_tok.split('.')[1]
-                    payload_part += '=' * (-len(payload_part) % 4)
-                    id_claims = json.loads(base64.urlsafe_b64decode(payload_part).decode('utf-8'))
-            except Exception:
-                pass
-
-        # User profile
-        email = id_claims.get('email')
-        user_name = id_claims.get('name')
-        avatar_url = id_claims.get('picture')
-
-        try:
-            req_u = urllib.request.Request(
-                'https://www.googleapis.com/oauth2/v3/userinfo',
-                headers={'Authorization': f'Bearer {access_token}'}
-            )
-            with urllib.request.urlopen(req_u, timeout=3.0) as r:
-                u_info = json.loads(r.read().decode('utf-8'))
-                if u_info.get('email'): email = u_info.get('email')
-                if u_info.get('name'): user_name = u_info.get('name')
-                if u_info.get('picture'): avatar_url = u_info.get('picture')
-        except Exception:
-            pass
-
-        # Consult manifest.json for known account details (avatar, tier)
-        man_account_info = {}
-        try:
-            man_path = Path.home() / ".gemini" / "accounts" / "manifest.json"
-            if man_path.exists():
-                with open(man_path, 'r', encoding='utf-8') as mf:
-                    m_data = json.load(mf)
-                    if email and email in m_data:
-                        man_account_info = m_data[email]
-                    elif not email and refresh_token:
-                        for m_acc, m_info in m_data.items():
-                            tf = m_info.get('token_file')
-                            if tf and os.path.exists(tf):
-                                with open(tf, 'r', encoding='utf-8') as tff:
-                                    if refresh_token in tff.read():
-                                        email = m_acc
-                                        man_account_info = m_info
-                                        break
-                    if email and token_str and token_str.startswith('{'):
-                        acc_tf = os.path.expanduser(f"~/.gemini/accounts/{email}.token")
-                        try:
-                            with open(acc_tf, 'w', encoding='utf-8') as f:
-                                f.write(token_str)
-                        except Exception:
-                            pass
-        except Exception:
-            pass
-
-        if not avatar_url and man_account_info.get('avatar'):
-            avatar_url = man_account_info['avatar']
-
-        # Fetch Plan / Tier Name
-        tier_name = man_account_info.get('tier', 'Google AI Pro')
-        tier_code = man_account_info.get('tier_code', 'pro')
-        try:
-            req_tier = urllib.request.Request(
-                'https://daily-cloudcode-pa.googleapis.com/v1internal:loadCodeAssist',
-                headers={
-                    'Authorization': f'Bearer {access_token}',
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'antigravity'
-                },
-                data=b'{}'
-            )
-            with urllib.request.urlopen(req_tier, timeout=3.0) as resp:
-                tier_data = json.loads(resp.read().decode('utf-8'))
-                paid = tier_data.get('paidTier', {})
-                curr = tier_data.get('currentTier', {})
-                raw_name = paid.get('name') or curr.get('name') or ""
-                if raw_name:
-                    clean_name_tier = raw_name.replace('Antigravity', '').strip()
-                    if 'ultra' in clean_name_tier.lower():
-                        tier_code = 'ultra'
-                        tier_name = clean_name_tier
-                    elif 'pro' in clean_name_tier.lower():
-                        tier_code = 'pro'
-                        tier_name = clean_name_tier
-                    elif 'enterprise' in clean_name_tier.lower():
-                        tier_code = 'enterprise'
-                        tier_name = clean_name_tier
-                    elif 'free' in clean_name_tier.lower():
-                        if man_account_info.get('tier_code') not in ['pro', 'ultra', 'enterprise']:
-                            tier_code = 'free'
-                            tier_name = clean_name_tier
-        except Exception:
-            pass
-
-        # Final verification: If tier_code is free but manifest or models indicate pro, keep pro
-        if tier_code == 'free' and man_account_info.get('tier_code') in ['pro', 'ultra', 'enterprise']:
-            tier_code = man_account_info['tier_code']
-            tier_name = man_account_info.get('tier', 'Google AI Pro')
-
-        # Compute clean short display name (strictly short Gmail username: e.g. Developer)
-        clean_name = "User"
-        if email and '@' in email:
-            clean_name = email.split('@')[0].split('.')[0].capitalize()
-        elif user_name:
-            clean_name = user_name.split()[0].capitalize()
-
-        # Official Quota Summary (weekly and 5-hour rolling limits)
-        summary_data = None
-        try:
-            req_summary = urllib.request.Request(
-                'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
-                headers={
-                    'Authorization': f'Bearer {access_token}',
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'antigravity'
-                },
-                data=b'{}'
-            )
-            with urllib.request.urlopen(req_summary, timeout=4.0) as resp:
-                summary_data = json.loads(resp.read().decode('utf-8'))
-        except Exception:
-            pass
-
-        gemini_w_bucket = None
-        gemini_5h_bucket = None
-        p3_w_bucket = None
-        p3_5h_bucket = None
-        argon_w_bucket = None
-        argon_5h_bucket = None
-
-        if summary_data and 'groups' in summary_data:
-            for g in summary_data.get('groups', []):
-                for b in g.get('buckets', []):
-                    bid = b.get('bucketId', '')
-                    if bid == 'gemini-weekly':
-                        gemini_w_bucket = b
-                    elif bid == 'gemini-5h':
-                        gemini_5h_bucket = b
-                    elif bid == '3p-weekly':
-                        p3_w_bucket = b
-                    elif bid == '3p-5h':
-                        p3_5h_bucket = b
-                    elif 'argon' in bid.lower() or 'argon' in g.get('displayName', '').lower():
-                        if 'weekly' in bid.lower() or 'wtu' in bid.lower():
-                            argon_w_bucket = b
-                        elif '5h' in bid.lower():
-                            argon_5h_bucket = b
-
-        def _get_rem(b):
-            if not b:
-                return 1.0
-            rem = b.get('remainingFraction')
-            if rem is None and isinstance(b.get('remaining'), dict):
-                rem = b.get('remaining', {}).get('value')
-            try:
-                return float(rem) if rem is not None else 1.0
-            except Exception:
-                return 1.0
-
-        gw_rem = _get_rem(gemini_w_bucket)
-        g5_rem = _get_rem(gemini_5h_bucket)
-        p3w_rem = _get_rem(p3_w_bucket)
-        p35_rem = _get_rem(p3_5h_bucket)
-        argon_w_rem = _get_rem(argon_w_bucket) if argon_w_bucket else 0.0
-        argon_5h_rem = _get_rem(argon_5h_bucket) if argon_5h_bucket else argon_w_rem
-
-        gw_reset = gemini_w_bucket.get('resetTime') if gemini_w_bucket else None
-        g5_reset = gemini_5h_bucket.get('resetTime') if gemini_5h_bucket else None
-        p3w_reset = p3_w_bucket.get('resetTime') if p3_w_bucket else None
-        p35_reset = p3_5h_bucket.get('resetTime') if p3_5h_bucket else None
-        argon_w_reset = argon_w_bucket.get('resetTime') if argon_w_bucket else None
-        argon_5h_reset = argon_5h_bucket.get('resetTime') if argon_5h_bucket else argon_w_reset
-
-        gw_cd, gw_lr, gw_sec = format_countdown(gw_reset)
-        g5_cd, g5_lr, g5_sec = format_countdown(g5_reset)
-        p3w_cd, p3w_lr, p3w_sec = format_countdown(p3w_reset)
-        p35_cd, p35_lr, p35_sec = format_countdown(p35_reset)
-        argon_w_cd, argon_w_lr, argon_w_sec = format_countdown(argon_w_reset)
-        argon_5h_cd, argon_5h_lr, argon_5h_sec = format_countdown(argon_5h_reset)
-
-        # Model parsing from models_data
-        models = (models_data or {}).get('models', {})
-        pools_map = {}
-        for m_id, m_info in models.items():
-            quota = m_info.get('quotaInfo')
-            if not quota:
-                continue
-            rem = quota.get('remainingFraction', 1.0)
-            reset_time = quota.get('resetTime')
-            disp = m_info.get('displayName', m_id)
-
-            if 'argon' in m_id.lower() or 'argon' in disp.lower():
-                cat = 'Argon'
-            elif 'claude' in m_id.lower() or 'claude' in disp.lower():
-                cat = 'Claude Sonnet 4.6'
-            elif 'gpt' in m_id.lower():
-                cat = 'GPT-OSS 120B'
-            elif 'flash' in m_id.lower():
-                cat = 'Gemini 3.8 Flash High'
-            elif 'pro' in m_id.lower():
-                cat = 'Gemini 3.1 Pro'
-            else:
-                cat = 'Gemini Models'
-
-            if cat not in pools_map:
-                pools_map[cat] = {'rem': rem, 'reset_time': reset_time, 'display': disp}
-            elif rem < pools_map[cat]['rem']:
-                pools_map[cat]['rem'] = rem
-                if reset_time:
-                    pools_map[cat]['reset_time'] = reset_time
-
-        ordered = ['Gemini 3.8 Flash High', 'Gemini 3.1 Pro', 'Argon', 'Claude Sonnet 4.6', 'GPT-OSS 120B']
-        pools = []
-        for c in ordered:
-            is_claude_gpt = ('Claude' in c or 'GPT' in c)
-            is_argon = ('Argon' in c)
-
-            if is_claude_gpt:
-                base_rem = p35_rem
-                base_reset = p35_reset
-                base_cd = p35_cd
-                base_lr = p35_lr
-                base_sec = p35_sec
-                w_rem = p3w_rem
-                w_cd = p3w_cd
-            elif is_argon:
-                base_rem = argon_5h_rem
-                base_reset = argon_5h_reset
-                base_cd = argon_5h_cd
-                base_lr = argon_5h_lr
-                base_sec = argon_5h_sec
-                w_rem = argon_w_rem
-                w_cd = argon_w_cd
-            else:
-                base_rem = g5_rem
-                base_reset = g5_reset
-                base_cd = g5_cd
-                base_lr = g5_lr
-                base_sec = g5_sec
-                w_rem = gw_rem
-                w_cd = gw_cd
-
-            # If model-specific data exists from models_data
-            if c in pools_map and not is_argon:
-                p = pools_map[c]
-                if p['rem'] < base_rem:
-                    base_rem = p['rem']
-                    if p['reset_time']:
-                        base_reset = p['reset_time']
-                        base_cd, base_lr, base_sec = format_countdown(base_reset)
-
-            used_pct = round((1.0 - base_rem) * 100, 1)
-            rem_pct = round(base_rem * 100, 1)
-            pools.append({
-                'name': c,
-                'used_pct': used_pct,
-                'remaining_pct': rem_pct,
-                'resets_in': base_cd,
-                'reset_time': base_lr,
-                'reset_secs': base_sec,
-                'reset_iso': str(base_reset) if base_reset else '',
-                'weekly_rem': round(w_rem * 100, 1),
-                'weekly_pct': round((1.0 - w_rem) * 100, 1),
-                'weekly_resets': w_cd
-            })
-
-        primary_session = {
-            'name': '5-Hour Limit',
-            'used_pct': round((1.0 - g5_rem) * 100, 1),
-            'remaining_pct': round(g5_rem * 100, 1),
-            'resets_in': g5_cd,
-            'reset_time': g5_lr,
-            'reset_secs': g5_sec,
-            'reset_iso': str(g5_reset) if g5_reset else ''
-        }
-
-        weekly_payload = {
-            'name': 'Weekly Limit',
-            'used_pct': round((1.0 - gw_rem) * 100, 1),
-            'remaining_pct': round(gw_rem * 100, 1),
-            'resets_in': gw_cd,
-            'reset_time': gw_lr,
-            'reset_secs': gw_sec,
-            'reset_iso': str(gw_reset) if gw_reset else ''
-        }
-
-        res_payload = {
-            'email': email or 'Unknown',
-            'name': clean_name,
-            'avatar': avatar_url or '',
-            'tier': tier_name,
-            'tier_code': tier_code,
-            'session': primary_session,
-            'weekly': weekly_payload,
-            'pools': pools
-        }
-
-        final_email = (res_payload.get('email') or cache_key or 'unknown').lower().strip()
-        final_cache_key = final_email if '@' in final_email else cache_key
-
-        if final_cache_key in _QUOTA_CACHE:
-            old_data = _QUOTA_CACHE[final_cache_key].get('data', {})
-            if res_payload.get('tier_code') == 'free' and old_data.get('tier_code') in ['pro', 'ultra', 'enterprise']:
-                res_payload['tier_code'] = old_data['tier_code']
-                res_payload['tier'] = old_data['tier']
-            if not res_payload.get('avatar') and old_data.get('avatar'):
-                res_payload['avatar'] = old_data['avatar']
-
-        _QUOTA_CACHE[final_cache_key] = {'data': res_payload, 'time': now}
-        if final_cache_key != 'default':
-            _QUOTA_CACHE['default'] = {'data': res_payload, 'time': now}
-        return res_payload
-    except Exception:
-        return dict(_QUOTA_CACHE[cache_key]['data']) if cache_key in _QUOTA_CACHE else None
-
-def fetch_quota(force_refresh=False):
-    """Compatibility wrapper for Antigravity Quota Monitor."""
-    data = fetch_quota_and_tier(force_refresh=force_refresh)
-    if not data:
-        return None
-    session = data.get('session') or {}
-    weekly = data.get('weekly')
-    # If weekly is missing or defaulted to 100%, check if pools has real model-specific weekly quota
-    if not weekly or (weekly.get('remaining_pct', 100.0) >= 99.9 and data.get('pools')):
-        for p in data.get('pools', []):
-            w_rem = p.get('weekly_rem')
-            if w_rem is not None and float(w_rem) < 99.9:
-                weekly = {
-                    'name': 'Weekly Limit',
-                    'remaining_pct': float(w_rem),
-                    'used_pct': round(100.0 - float(w_rem), 1),
-                    'resets_in': p.get('weekly_resets') or 'Ready'
-                }
-                break
-    if not weekly:
-        weekly = {
-            'name': 'Weekly Limit',
-            'remaining_pct': session.get('remaining_pct', 100.0),
-            'used_pct': session.get('used_pct', 0.0),
-            'resets_in': 'Ready'
-        }
-    return {
-        'email': data.get('email', 'Unknown'),
-        'name': data.get('name', 'User'),
-        'avatar': data.get('avatar', ''),
-        'tier': data.get('tier', 'Google AI Pro'),
-        'tier_code': data.get('tier_code', 'pro'),
-        'session': session,
-        'weekly': weekly,
-        'pools': data.get('pools', [])
-    }
-
-
-if __name__ == '__main__':
+    _, _, pools = _build_quota_pools(groups, models)
+    assert [p["name"] for p in pools] == ORDERED_POOLS
+    argon_pool = next(p for p in pools if p["name"] == "Gemini 4 Argon")
+    assert argon_pool["remaining_pct"] == 85.0 and argon_pool["weekly_rem"] == 90.0
+
+    with tempfile.TemporaryDirectory() as tmp:
+        font_dir = Path(tmp) / "fonts"
+        font_dir.mkdir()
+        (font_dir / "Vazirmatn[wght].woff2").write_bytes(b"wOF2")
+        p_dec, mime = resolve_font_asset("Vazirmatn%5Bwght%5D.woff2", extra_dirs=[font_dir])
+        assert p_dec is not None and p_dec.name == "Vazirmatn[wght].woff2" and mime == "font/woff2"
+        assert resolve_font_asset("../secret.py", extra_dirs=[font_dir]) == (None, None)
+
+        tf = Path(tmp) / "a.token"
+        tf.write_text(raw_json, encoding="utf-8")
+        san = sanitize_manifest_for_client({"a@b.com": {"email": "a@b.com", "token_file": str(tf)}})
+        assert "token_file" not in san["a@b.com"] and san["a@b.com"]["has_token"] is True
+
+    wb = {"type": "page", "url": "vscode-file://vscode-app/index.html", "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/1"}
+    ext = {"type": "page", "url": "https://example.com/ai/", "webSocketDebuggerUrl": "ws://127.0.0.1:9222/devtools/page/2"}
+    assert select_workbench_target([ext, wb]) == wb
+    assert select_workbench_target([ext]) is None
+
+    assert check_local_http_request({}, "GET", "/fonts/Vazirmatn%5Bwght%5D.woff2") == (True, "*")
+    assert check_local_http_request({"Origin": "vscode-file://vscode-app", "Content-Type": "application/json"}, "POST", "/api/switch") == (True, "vscode-file://vscode-app")
+    assert check_local_http_request({"Origin": "https://evil.com", "Content-Type": "application/json"}, "POST", "/api/switch")[0] is False
+    assert check_local_http_request({"Origin": "null", "Content-Type": "application/json"}, "POST", "/api/switch")[0] is False
+    assert check_local_http_request({"Origin": "http://127.0.0.1:39285"}, "POST", "/api/switch")[0] is False
+    assert check_local_http_request({"Sec-Fetch-Site": "cross-site"}, "GET", "/api/state")[0] is False
+
+    print("quota_engine self-tests passed.")
+    return 0
+
+
+if __name__ == "__main__":
+    arg = sys.argv[1] if len(sys.argv) > 1 else ""
+    if arg == "--test":
+        sys.exit(_run_self_tests())
+    if arg == "--doctor":
+        print(json.dumps(diagnose_suite(), indent=2, ensure_ascii=False))
+        sys.exit(0)
     res = fetch_quota_and_tier()
-    if res:
-        print(json.dumps(res, indent=2, ensure_ascii=False))
-    else:
-        print(json.dumps({'error': 'No active session found'}))
+    print(json.dumps(res or {"error": "No active session found"}, indent=2, ensure_ascii=False))

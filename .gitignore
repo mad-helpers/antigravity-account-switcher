@@ -27,6 +27,8 @@ venv/
 # App build cache
 *.tmp
 *.log
+.pytest_cache/
+*.bak
 
 # Antigravity agent configuration
 GEMINI.md

@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Account &amp; Quota Hub</title>
+  <style>
+    @font-face {
+      font-family: 'Vazirmatn';
+      src: local('Vazirmatn'),
+           url("./fonts/Vazirmatn[wght].woff2") format("woff2"),
+           url("/fonts/Vazirmatn%5Bwght%5D.woff2") format("woff2"),
+           url("http://127.0.0.1:39281/fonts/Vazirmatn[wght].woff2") format("woff2");
+      font-weight: 100 900;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: 'Estedad';
+      src: local('Estedad'),
+           url("./fonts/Estedad[wght].woff2") format("woff2"),
+           url("/fonts/Estedad%5Bwght%5D.woff2") format("woff2"),
+           url("http://127.0.0.1:39281/fonts/Estedad[wght].woff2") format("woff2");
+      font-weight: 100 900;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: 'Outfit';
+      src: local('Outfit'),
+           url("./fonts/Outfit[wght].woff2") format("woff2"),
+           url("/fonts/Outfit%5Bwght%5D.woff2") format("woff2"),
+           url("http://127.0.0.1:39281/fonts/Outfit[wght].woff2") format("woff2");
+      font-weight: 100 900;
+      font-display: swap;
+    }
+    :root {
+      --bg-0: #060a13;
+      --bg-1: rgba(15, 23, 42, 0.82);
+      --bg-card: rgba(24, 35, 56, 0.62);
+      --border: rgba(148, 163, 184, 0.18);
+      --border-strong: rgba(56, 189, 248, 0.42);
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-2: #818cf8;
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --danger: #f87171;
+      --font-sans: 'Vazirmatn', 'Outfit', system-ui, -apple-system, sans-serif;
+      --font-mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: radial-gradient(circle at top right, rgba(56, 189, 248, 0.14), transparent 55%),
+                  radial-gradient(circle at bottom left, rgba(129, 140, 248, 0.12), transparent 55%),
+                  var(--bg-0);
+      color: var(--text);
+      font-family: var(--font-sans);
+      font-size: 12.5px;
+      line-height: 1.5;
+      min-height: 100vh;
+      padding: 10px;
+      overflow-x: hidden;
+    }
+    .ltr { direction: ltr; unicode-bidi: isolate; font-family: 'Outfit', var(--font-sans); }
+    .hub-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 9px 11px;
+      border-radius: 12px;
+      background: var(--bg-1);
+      border: 1px solid var(--border);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      margin-bottom: 10px;
+    }
+    .hub-brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 13px;
+    }
+    .hub-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--ok);
+      box-shadow: 0 0 8px var(--ok);
+    }
+    .hub-dot.offline { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+    .hub-actions { display: flex; align-items: center; gap: 5px; }
+    .btn {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: rgba(30, 41, 59, 0.75);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 11.5px;
+      font-weight: 600;
+      padding: 5px 9px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      white-space: nowrap;
+    }
+    .btn:hover:not(:disabled) {
+      border-color: var(--border-strong);
+      background: rgba(56, 189, 248, 0.16);
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary {
+      background: linear-gradient(135deg, rgba(56, 189, 248, 0.24), rgba(129, 140, 248, 0.24));
+      border-color: rgba(56, 189, 248, 0.45);
+    }
+    .btn-warn {
+      background: rgba(251, 191, 36, 0.18);
+      border-color: rgba(251, 191, 36, 0.45);
+      color: #fde68a;
+    }
+    .card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 11px;
+      margin-bottom: 10px;
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+    }
+    .card-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-weight: 700;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 8px;
+      gap: 6px;
+    }
+    .banner {
+      border-radius: 10px;
+      padding: 8px 10px;
+      margin-bottom: 10px;
+      font-size: 11.5px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .banner-ok {
+      background: rgba(52, 211, 153, 0.12);
+      border: 1px solid rgba(52, 211, 153, 0.35);
+      color: #a7f3d0;
+    }
+    .banner-warn {
+      background: rgba(251, 191, 36, 0.13);
+      border: 1px solid rgba(251, 191, 36, 0.42);
+      color: #fde68a;
+    }
+    .banner-danger {
+      background: rgba(248, 113, 113, 0.14);
+      border: 1px solid rgba(248, 113, 113, 0.42);
+      color: #fecaca;
+    }
+    .acc-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .acc-email {
+      font-weight: 700;
+      font-size: 13px;
+      color: var(--text);
+      word-break: break-all;
+    }
+    .tier-badge {
+      font-size: 10.5px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: rgba(56, 189, 248, 0.18);
+      border: 1px solid rgba(56, 189, 248, 0.4);
+      color: #7dd3fc;
+    }
+    .meter-group { display: flex; flex-direction: column; gap: 7px; margin-top: 8px; }
+    .meter-row { display: flex; flex-direction: column; gap: 3px; }
+    .meter-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 11.5px;
+      gap: 6px;
+    }
+    .meter-sub { font-size: 10.5px; color: var(--muted); }
+    .progress-track {
+      width: 100%;
+      height: 6px;
+      background: rgba(15, 23, 42, 0.78);
+      border-radius: 999px;
+      overflow: hidden;
+      border: 1px solid rgba(148, 163, 184, 0.12);
+    }
+    .progress-fill {
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent), var(--ok));
+      transition: width 0.25s ease;
+    }
+    .progress-fill.warn { background: linear-gradient(90deg, #f59e0b, #fbbf24); }
+    .progress-fill.danger { background: linear-gradient(90deg, #ef4444, #f87171); }
+    .pool-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 6px;
+    }
+    .pool-item {
+      padding: 6px 8px;
+      border-radius: 8px;
+      background: rgba(15, 23, 42, 0.54);
+      border: 1px solid rgba(148, 163, 184, 0.12);
+    }
+    .acc-list, .proj-list {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+    }
+    .acc-item, .proj-item {
+      padding: 8px 9px;
+      border-radius: 9px;
+      background: rgba(15, 23, 42, 0.56);
+      border: 1px solid rgba(148, 163, 184, 0.15);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .acc-item.active {
+      border-color: rgba(52, 211, 153, 0.48);
+      background: rgba(52, 211, 153, 0.08);
+    }
+    .btn-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+    .select {
+      width: 100%;
+      background: rgba(15, 23, 42, 0.88);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: 5px 8px;
+      font-family: inherit;
+      font-size: 11.5px;
+    }
+    .toast {
+      position: fixed;
+      bottom: 12px;
+      left: 12px;
+      right: 12px;
+      padding: 8px 11px;
+      border-radius: 9px;
+      background: rgba(15, 23, 42, 0.96);
+      border: 1px solid var(--border-strong);
+      color: var(--text);
+      font-size: 11.5px;
+      z-index: 99;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+      display: none;
+    }
+    .toast.show { display: block; }
+  </style>
+</head>
+<body>
+  <header class="hub-header">
+    <div class="hub-brand">
+      <span id="daemon-dot" class="hub-dot"></span>
+      <span id="hub-title">مرکز حساب و سهمیه</span>
+    </div>
+    <div class="hub-actions">
+      <button type="button" id="btn-refresh" class="btn" title="Refresh">🔄</button>
+      <button type="button" id="btn-lang" class="btn">EN</button>
+    </div>
+  </header>
+
+  <!-- 1. CDP HUD & Smart RTL Live Status Banner -->
+  <div id="cdp-banner" class="banner banner-ok"></div>
+
+  <!-- 2. Session Mismatch Alert (live_ide_email vs credential_email) -->
+  <div id="mismatch-banner" class="banner banner-danger" style="display:none;"></div>
+
+  <!-- 3. Active Account Card + 5h & Weekly Progress -->
+  <section class="card">
+    <div class="card-title">
+      <span id="lbl-active-card">حساب فعال و سهمیه لحظه‌ای</span>
+      <span id="active-tier" class="tier-badge">—</span>
+    </div>
+    <div class="acc-header">
+      <span id="active-email" class="acc-email ltr">—</span>
+    </div>
+    <div class="meter-group" id="session-weekly-meters"></div>
+  </section>
+
+  <!-- 4. All 6 Model Pools (Hydrogen, Argon, Carbon & Orchestrator, Flash, Claude 4.6, GPT-OSS) -->
+  <section class="card">
+    <div class="card-title">
+      <span id="lbl-pools-card">سهمیه تفکیکی ۶ استخر مدل (v3.0)</span>
+    </div>
+    <div id="pools-container" class="pool-grid"></div>
+  </section>
+
+  <!-- 5. Saved Accounts & 1-Click Actions -->
+  <section class="card">
+    <div class="card-title">
+      <span id="lbl-accounts-card">حساب‌های ذخیره‌شده</span>
+      <button type="button" id="btn-oauth-add" class="btn btn-primary">➕ ورود با گوگل</button>
+    </div>
+    <div id="accounts-container" class="acc-list"></div>
+  </section>
+
+  <!-- 6. Per-Project Quota Payer Assignments -->
+  <section class="card">
+    <div class="card-title">
+      <span id="lbl-projects-card">سهمیه اختصاصی پروژه‌ها (Quota Payer)</span>
+    </div>
+    <div id="projects-container" class="proj-list"></div>
+  </section>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    (() => {
+      'use strict';
+
+      const STRINGS = {
+        fa: {
+          title: 'مرکز حساب و سهمیه',
+          langBtn: 'EN',
+          activeCard: 'حساب فعال و سهمیه لحظه‌ای',
+          poolsCard: 'سهمیه تفکیکی ۶ استخر مدل (v3.0)',
+          accountsCard: 'حساب‌های ذخیره‌شده',
+          projectsCard: 'سهمیه اختصاصی پروژه‌ها (Quota Payer)',
+          oauthAdd: '➕ ورود با گوگل',
+          session5h: 'سهمیه ۵ ساعته (Session)',
+          weekly: 'سهمیه هفتگی (Weekly)',
+          remaining: 'باقی‌مانده',
+          resetsIn: 'ریست:',
+          cdpActive: '🟢 فعال در ادیتور — HUD سهمیه و راست‌چین هوشمند v3 متصل است',
+          cdpInactive: '⚠️ حالت پس‌زمینه (بدون پرچم دیباگ) — برای تزریق زنده HUD و راست‌چین هوشمند در ادیتور:',
+          cdpRestartBtn: '⚡️ فعال‌سازی HUD و راست‌چین هوشمند (ری‌استارت با CDP)',
+          mismatchTitle: '⚠️ عدم تطابق نشست ادیتور (Session Mismatch)',
+          mismatchDesc: (ide, cred) => `نشست فعلی ادیتور روی ${ide} است اما کلید سیستم روی ${cred} تنظیم شده است.`,
+          restartIdeBtn: '🔄 ری‌استارت IDE',
+          switchFast: '⚡ سوئیچ',
+          switchRestart: '🔄 سوئیچ + ری‌استارت',
+          launchWindow: '🪟 پنجره دوم',
+          reauthBtn: '🔑 ورود مجدد گوگل',
+          activeTag: 'فعال ●',
+          needsAuth: 'نیازمند ورود مجدد',
+          noProjects: 'پروژه‌ای یافت نشد.',
+          defaultPayer: 'حساب پیش‌فرض سیستم',
+          switchedToast: 'حساب با موفقیت تغییر یافت.',
+          restartingToast: 'در حال ری‌استارت Antigravity با پرچم CDP...',
+          launchingToast: 'در حال باز کردن پنجره مجزا...',
+          oauthToast: 'مرورگر برای ورود با گوگل باز شد.',
+          payerSavedToast: 'حساب پرداخت‌کننده سهمیه پروژه ثبت شد.',
+        },
+        en: {
+          title: 'Account & Quota Hub',
+          langBtn: 'فا',
+          activeCard: 'Active Account & Live Quota',
+          poolsCard: '6 Model Pools Breakdown (v3.0)',
+          accountsCard: 'Saved Google Accounts',
+          projectsCard: 'Per-Project Quota Payer',
+          oauthAdd: '➕ Sign in with Google',
+          session5h: '5-Hour Session Quota',
+          weekly: 'Weekly Rolling Quota',
+          remaining: 'remaining',
+          resetsIn: 'Resets:',
+          cdpActive: '🟢 Active in Editor — Live Quota HUD & Smart RTL v3 connected via CDP',
+          cdpInactive: '⚠️ Background Mode (No Debug Flag) — Relaunch with CDP to inject live HUD & Smart RTL:',
+          cdpRestartBtn: '⚡️ Enable HUD & Smart RTL (Restart with CDP)',
+          mismatchTitle: '⚠️ Live Session Mismatch Detected',
+          mismatchDesc: (ide, cred) => `Open IDE session is on ${ide} while OS Credential Manager is on ${cred}.`,
+          restartIdeBtn: '🔄 Restart IDE',
+          switchFast: '⚡ Switch',
+          switchRestart: '🔄 Switch + Restart',
+          launchWindow: '🪟 2nd Window',
+          reauthBtn: '🔑 Google Sign-In',
+          activeTag: 'ACTIVE ●',
+          needsAuth: 'Needs Re-Auth',
+          noProjects: 'No projects detected.',
+          defaultPayer: 'System Active Account',
+          switchedToast: 'Account switched successfully.',
+          restartingToast: 'Restarting Antigravity with CDP flag...',
+          launchingToast: 'Launching isolated Antigravity window...',
+          oauthToast: 'Browser opened for Google OAuth sign-in.',
+          payerSavedToast: 'Project quota payer updated.',
+        },
+      };
+
+      const CANONICAL_POOLS = [
+        { key: 'hydrogen', match: /hydrogen/i, label: 'Gemini 4 Hydrogen' },
+        { key: 'argon', match: /argon/i, label: 'Gemini 4 Argon' },
+        { key: 'carbon', match: /carbon|orchestrator/i, label: 'Gemini 4 Carbon & Orchestrator' },
+        { key: 'flash', match: /flash/i, label: 'Gemini 3.8 Flash' },
+        { key: 'claude', match: /claude/i, label: 'Claude 4.6 (Opus & Sonnet)' },
+        { key: 'gpt', match: /gpt/i, label: 'GPT-OSS 120B' },
+      ];
+
+      let lang =
+        localStorage.getItem('antigravity:switcher_lang') ||
+        localStorage.getItem('agy_switcher_lang') ||
+        localStorage.getItem('agy-hub-lang') ||
+        'fa';
+      if (lang !== 'fa' && lang !== 'en') lang = 'fa';
+      let stateData = null;
+      let toastTimer = null;
+
+      const $ = (id) => document.getElementById(id);
+      const esc = (s) =>
+        String(s ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+
+      function showToast(msg) {
+        const el = $('toast');
+        if (!el) return;
+        el.textContent = msg;
+        el.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => el.classList.remove('show'), 3200);
+      }
+
+      async function getJson(path) {
+        const opts = { method: 'GET', headers: { Accept: 'application/json' } };
+        try {
+          const r = await fetch(path, opts);
+          if (r.ok) return await r.json();
+        } catch (_) {}
+        const direct = await fetch(`http://127.0.0.1:39281${path}`, opts);
+        return await direct.json();
+      }
+
+      async function postJson(url, bodyObj = {}) {
+        const opts = {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify(bodyObj || {}),
+        };
+        try {
+          const r = await fetch(url, opts);
+          if (r.ok) return await r.json();
+        } catch (_) {}
+        const direct = await fetch(`http://127.0.0.1:39281${url}`, opts);
+        return await direct.json();
+      }
+
+      function fillClass(remPct) {
+        const rem = Number(remPct ?? 100);
+        if (rem <= 15) return 'progress-fill danger';
+        if (rem <= 35) return 'progress-fill warn';
+        return 'progress-fill';
+      }
+
+      function renderMeter(title, remPct, resetsIn) {
+        const t = STRINGS[lang];
+        const rem = Math.max(0, Math.min(100, Math.round(Number(remPct ?? 100))));
+        const resetTxt = resetsIn ? `${t.resetsIn} ${esc(resetsIn)}` : '';
+        return `
+          <div class="meter-row">
+            <div class="meter-label">
+              <span>${esc(title)}</span>
+              <span class="ltr"><strong>${rem}%</strong> ${esc(t.remaining)}</span>
+            </div>
+            <div class="progress-track">
+              <div class="${fillClass(rem)}" style="width:${rem}%"></div>
+            </div>
+            ${resetTxt ? `<div class="meter-sub ltr">${resetTxt}</div>` : ''}
+          </div>
+        `;
+      }
+
+      function normalizePools(rawPools, sessionRem, sessionReset) {
+        const list = Array.isArray(rawPools) ? rawPools : [];
+        return CANONICAL_POOLS.map((slot) => {
+          const found = list.find((p) => slot.match.test(String(p?.name || p?.id || '')));
+          const rem =
+            found && found.remaining_pct !== undefined
+              ? Number(found.remaining_pct)
+              : found && found.used_pct !== undefined
+                ? 100 - Number(found.used_pct)
+                : Number(sessionRem ?? 100);
+          return {
+            name: found?.name || slot.label,
+            remaining_pct: rem,
+            resets_in: found?.resets_in || sessionReset || '',
+          };
+        });
+      }
+
+      function render() {
+        const t = STRINGS[lang];
+        document.documentElement.lang = lang;
+        document.documentElement.dir = lang === 'fa' ? 'rtl' : 'ltr';
+        $('hub-title').textContent = t.title;
+        $('btn-lang').textContent = t.langBtn;
+        $('lbl-active-card').textContent = t.activeCard;
+        $('lbl-pools-card').textContent = t.poolsCard;
+        $('lbl-accounts-card').textContent = t.accountsCard;
+        $('lbl-projects-card').textContent = t.projectsCard;
+        $('btn-oauth-add').textContent = t.oauthAdd;
+
+        if (!stateData) return;
+
+        const active = stateData.activeAccount || {};
+        const authState = stateData.authState || {};
+        const cdpConnected = Boolean(
+          stateData.cdpConnected ||
+          (Array.isArray(stateData.cdpTargets) && stateData.cdpTargets.length > 0) ||
+          (Array.isArray(stateData.runningInstances) && stateData.runningInstances.length > 0)
+        );
+
+        const cdpEl = $('cdp-banner');
+        if (cdpConnected) {
+          cdpEl.className = 'banner banner-ok';
+          cdpEl.innerHTML = `<div>${esc(t.cdpActive)}</div>`;
+        } else {
+          cdpEl.className = 'banner banner-warn';
+          cdpEl.innerHTML = `
+            <div>${esc(t.cdpInactive)}</div>
+            <div>
+              <button type="button" class="btn btn-warn" data-action="restart-cdp">${esc(t.cdpRestartBtn)}</button>
+            </div>
+          `;
+        }
+
+        const mismatch = Boolean(authState.session_mismatch || active.session_mismatch);
+        const liveIdeEmail = authState.live_ide_email || active.live_ide_email || '';
+        const credEmail = authState.credential_email || active.credential_email || active.email || '';
+        const mismatchEl = $('mismatch-banner');
+        if (mismatch && liveIdeEmail && credEmail) {
+          mismatchEl.style.display = 'flex';
+          mismatchEl.innerHTML = `
+            <strong>${esc(t.mismatchTitle)}</strong>
+            <div>${esc(t.mismatchDesc(liveIdeEmail, credEmail))}</div>
+            <div class="btn-row">
+              <button type="button" class="btn btn-warn" data-action="restart-cdp">${esc(t.restartIdeBtn)}</button>
+              <button type="button" class="btn" data-action="launch-dual" data-email="${esc(credEmail)}">${esc(t.launchWindow)}</button>
+            </div>
+          `;
+        } else {
+          mismatchEl.style.display = 'none';
+        }
+
+        $('active-email').textContent = active.email || credEmail || '—';
+        $('active-tier').textContent = active.tier || 'Pro';
+
+        const sessRem = active.session?.remaining_pct ?? active.remaining_pct ?? 100;
+        const sessReset = active.session?.resets_in || '';
+        const weekRem = active.weekly?.remaining_pct ?? active.weekly_remaining_pct ?? 100;
+        const weekReset = active.weekly?.resets_in || active.weekly_resets_in || '';
+
+        $('session-weekly-meters').innerHTML =
+          renderMeter(t.session5h, sessRem, sessReset) +
+          renderMeter(t.weekly, weekRem, weekReset);
+
+        const pools = normalizePools(active.pools, sessRem, sessReset);
+        $('pools-container').innerHTML = pools
+          .map(
+            (p) => `
+          <div class="pool-item">
+            ${renderMeter(p.name, p.remaining_pct, p.resets_in)}
+          </div>
+        `
+          )
+          .join('');
+
+        const saved = stateData.savedAccounts || {};
+        const emails = Object.keys(saved);
+        const activeEmailLower = String(active.email || credEmail || '').toLowerCase();
+
+        $('accounts-container').innerHTML = emails
+          .map((email) => {
+            const acc = saved[email] || {};
+            const isCurrent = email.toLowerCase() === activeEmailLower;
+            const needsAuth = Boolean(acc.needs_reauth || acc.has_token === false);
+            const rem5h = Math.round(Number(acc.remaining_pct ?? 100));
+            const remWk = Math.round(Number(acc.weekly_remaining_pct ?? 100));
+            return `
+            <div class="acc-item ${isCurrent ? 'active' : ''}">
+              <div class="acc-header">
+                <span class="acc-email ltr">${esc(email)}</span>
+                <span class="tier-badge">${esc(acc.tier || 'Pro')} ${isCurrent ? `· ${esc(t.activeTag)}` : ''}</span>
+              </div>
+              <div class="meter-sub ltr">5h: ${rem5h}% · Weekly: ${remWk}% ${needsAuth ? `· ⚠️ ${esc(t.needsAuth)}` : ''}</div>
+              <div class="btn-row">
+                <button type="button" class="btn btn-primary" data-action="switch-fast" data-email="${esc(email)}">${esc(t.switchFast)}</button>
+                <button type="button" class="btn" data-action="switch-restart" data-email="${esc(email)}">${esc(t.switchRestart)}</button>
+                <button type="button" class="btn" data-action="launch-dual" data-email="${esc(email)}">${esc(t.launchWindow)}</button>
+                ${needsAuth ? `<button type="button" class="btn btn-warn" data-action="reauth" data-email="${esc(email)}">${esc(t.reauthBtn)}</button>` : ''}
+              </div>
+            </div>
+          `;
+          })
+          .join('');
+
+        const projects = Array.isArray(stateData.projects) ? stateData.projects : [];
+        if (!projects.length) {
+          $('projects-container').innerHTML = `<div class="meter-sub">${esc(t.noProjects)}</div>`;
+        } else {
+          $('projects-container').innerHTML = projects
+            .map((proj) => {
+              const pid = proj.id || proj.name || '';
+              const currentPayer = proj.quota_account || '';
+              const opts = [
+                `<option value="">${esc(t.defaultPayer)}</option>`,
+                ...emails.map(
+                  (em) => `<option value="${esc(em)}" ${em === currentPayer ? 'selected' : ''}>${esc(em)}</option>`
+                ),
+              ].join('');
+              return `
+              <div class="proj-item">
+                <div class="acc-header">
+                  <strong>${esc(proj.name || pid)}</strong>
+                  <span class="meter-sub ltr">${esc(proj.conversation_count ?? 0)} convs</span>
+                </div>
+                <select class="select proj-payer-select" data-pid="${esc(pid)}">${opts}</select>
+              </div>
+            `;
+            })
+            .join('');
+        }
+      }
+
+      async function refreshState() {
+        try {
+          const data = await getJson('/api/state');
+          if (data && (data.activeAccount || data.savedAccounts)) {
+            stateData = data;
+            if (!Array.isArray(stateData.projects) || !stateData.projects.length) {
+              try {
+                const projs = await getJson('/api/projects');
+                if (Array.isArray(projs)) stateData.projects = projs;
+              } catch (_) {}
+            }
+            $('daemon-dot').classList.remove('offline');
+            render();
+            return;
+          }
+        } catch (_) {}
+        $('daemon-dot').classList.add('offline');
+      }
+
+      document.addEventListener('click', async (e) => {
+        const btn = e.target.closest('button[data-action]');
+        if (!btn) return;
+        const action = btn.dataset.action;
+        const email = btn.dataset.email || '';
+        const t = STRINGS[lang];
+        btn.disabled = true;
+        try {
+          if (action === 'switch-fast') {
+            await postJson('/api/switch', { accountKey: email, noRestart: true });
+            showToast(t.switchedToast);
+            await refreshState();
+          } else if (action === 'switch-restart') {
+            await postJson('/api/switch', { accountKey: email, noRestart: false });
+            showToast(t.restartingToast);
+            await refreshState();
+          } else if (action === 'restart-cdp') {
+            await postJson('/api/restart', {});
+            showToast(t.restartingToast);
+          } else if (action === 'launch-dual') {
+            await postJson('/api/launch_dual', { accountKey: email });
+            showToast(t.launchingToast);
+          } else if (action === 'reauth') {
+            await postJson('/api/oauth_signin', { account: email, noRestart: true });
+            showToast(t.oauthToast);
+          }
+        } finally {
+          btn.disabled = false;
+        }
+      });
+
+      document.addEventListener('change', async (e) => {
+        const sel = e.target.closest('.proj-payer-select');
+        if (!sel) return;
+        const pid = sel.dataset.pid;
+        const account = sel.value;
+        await postJson('/api/project_set_quota_account', { projectId: pid, account });
+        showToast(STRINGS[lang].payerSavedToast);
+        await refreshState();
+      });
+
+      $('btn-refresh').addEventListener('click', refreshState);
+      $('btn-lang').addEventListener('click', () => {
+        lang = lang === 'fa' ? 'en' : 'fa';
+        localStorage.setItem('antigravity:switcher_lang', lang);
+        localStorage.setItem('agy_switcher_lang', lang);
+        localStorage.setItem('agy-hub-lang', lang);
+        postJson('/api/settings', { lang }).catch(() => {});
+        render();
+      });
+      $('btn-oauth-add').addEventListener('click', async () => {
+        await postJson('/api/oauth_signin', {});
+        showToast(STRINGS[lang].oauthToast);
+      });
+
+      render();
+      refreshState();
+      setInterval(refreshState, 12000);
+    })();
+  </script>
+</body>
+</html>

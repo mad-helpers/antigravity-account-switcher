@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Antigravity Account Switcher | ریک سانچز</title>
+  <title>Antigravity Account Switcher &amp; 6-Pool Quota HUD v3.0 | mad-helpers</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;600;700;900&family=JetBrains+Mono:wght@400;600&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
@@ -65,6 +65,8 @@
       justify-content: space-between;
       align-items: center;
       margin-bottom: 50px;
+      flex-wrap: wrap;
+      gap: 12px;
     }
 
     .logo-area {
@@ -91,6 +93,7 @@
       display: flex;
       gap: 12px;
       align-items: center;
+      flex-wrap: wrap;
     }
 
     .btn-star {
@@ -113,27 +116,6 @@
       box-shadow: 0 0 15px rgba(251, 191, 36, 0.4);
     }
 
-    .btn-github {
-      background: rgba(255, 255, 255, 0.08);
-      border: 1px solid var(--card-border);
-      color: var(--text);
-      padding: 8px 18px;
-      border-radius: 9999px;
-      text-decoration: none;
-      font-size: 0.9rem;
-      font-weight: 600;
-      transition: all 0.2s ease;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .btn-github:hover {
-      background: rgba(255, 255, 255, 0.15);
-      border-color: var(--accent-primary);
-      transform: translateY(-2px);
-    }
-
-    /* Hero Section */
     .hero {
       text-align: center;
       margin-bottom: 40px;
@@ -171,11 +153,10 @@
     p.lead {
       font-size: 1.2rem;
       color: var(--text-muted);
-      max-width: 720px;
+      max-width: 760px;
       margin: 0 auto 36px;
     }
 
-    /* Centerpiece Showcase Banner */
     .showcase-area {
       display: flex;
       justify-content: center;
@@ -195,7 +176,6 @@
       transform: scale(1.015);
     }
 
-    /* OS Tabs */
     .tabs-wrapper {
       background: var(--card-bg);
       border: 1px solid var(--card-border);
@@ -211,6 +191,7 @@
       justify-content: center;
       gap: 12px;
       margin-bottom: 30px;
+      flex-wrap: wrap;
     }
 
     .tab-btn {
@@ -274,7 +255,6 @@
       color: #000;
     }
 
-    /* Features Grid */
     .features-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -312,7 +292,6 @@
       line-height: 1.6;
     }
 
-    /* Author Banner */
     .author-banner {
       background: linear-gradient(135deg, rgba(56, 189, 248, 0.1), rgba(129, 140, 248, 0.1));
       border: 1px solid rgba(56, 189, 248, 0.25);
@@ -351,7 +330,7 @@
     <header>
       <div class="logo-area">
         <div class="logo-icon">🚀</div>
-        <span>Antigravity Switcher</span>
+        <span>Antigravity Suite v3.0</span>
       </div>
       <div class="header-links">
         <a href="https://t.me/antigravity_iran" target="_blank" class="btn-star" style="background: linear-gradient(135deg, #229ED9, #0088cc); color: #fff; border: none;">
@@ -360,7 +339,7 @@
         <a href="https://t.me/+Kq4Yl6UvpqEwMDJk" target="_blank" class="btn-star" style="background: rgba(34, 158, 217, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3);">
           💬 گروه گفت‌وگو
         </a>
-        <a href="https://github.com/m4tinbeigi-official/antigravity-account-switcher" target="_blank" class="btn-star">
+        <a href="https://github.com/mad-helpers/antigravity-account-switcher" target="_blank" class="btn-star">
           ⭐ Star در گیت‌هاب
         </a>
       </div>
@@ -368,12 +347,12 @@
 
     <main>
       <section class="hero">
-        <a href="https://github.com/m4tinbeigi-official" target="_blank" class="creator-badge">
-          👨‍💻 سازنده: <b>Rick Sanchez (@m4tinbeigi-official)</b>
+        <a href="https://github.com/mad-helpers" target="_blank" class="creator-badge">
+          👨‍💻 تیم توسعه‌دهنده: <b>mad-helpers (Madgod-xyz &amp; Bombhub-apk)</b>
         </a>
-        <h1>سوئیچ آنی بین اکانت‌های گوگل<br>در Google Antigravity</h1>
+        <h1>سوئیچ آنی اکانت‌ها، پایش ۶ استخر سهمیه<br>و راست‌چین هوشمند در Google Antigravity</h1>
         <p class="lead">
-          ابزار کاملاً نیتیو، امن و خودکار برای جابه‌جایی سریع و بی‌دردسر بین اکانت‌های کاری و شخصی در مک (Apple Silicon & Intel) و ویندوز.
+          سوئیت کاملاً بومی v3.0 برای مدیریت چنداکانته، تله‌متری زنده ۶ استخر مدل (Hydrogen، Argon، Carbon، Flash، Claude 4.6 و GPT-OSS 120B)، پنل جانبی Sidecar و راست‌چین هوشمند نسخه ۳ در ویندوز، مک و لینوکس.
         </p>
       </section>
 
@@ -383,84 +362,83 @@
 
       <section class="tabs-wrapper">
         <div class="tabs-header">
-          <button class="tab-btn active" onclick="switchTab('mac')">
-            <span>🍏</span> macOS (سیلیکون و اینتل)
-          </button>
-          <button class="tab-btn" onclick="switchTab('windows')">
+          <button class="tab-btn active" onclick="switchTab('windows')">
             <span>🪟</span> Windows (۱۰ و ۱۱)
           </button>
-        </div>
-
-        <!-- macOS Tab -->
-        <div id="tab-mac" class="tab-pane active">
-          <h3 style="margin-bottom: 12px;">نصب خودکار در مک با یک دستور:</h3>
-          <div class="code-box">
-            <button class="copy-btn" onclick="copyCode(this)">کپی</button>
-            <code>git clone https://github.com/m4tinbeigi-official/antigravity-account-switcher.git && cd antigravity-account-switcher && ./install.sh</code>
-          </div>
-          <p style="color: var(--text-muted); font-size: 0.95rem;">
-            ✓ اپلیکیشن <b>AntigravitySwitcher.app</b> روی دسکتاپ و در Applications نصب شده و از طریق Spotlight (زدن Cmd+Space) یا دستور ترمینال <code>agy-switch</code> قابل استفاده است.
-          </p>
+          <button class="tab-btn" onclick="switchTab('mac')">
+            <span>🍏</span> macOS &amp; Linux
+          </button>
         </div>
 
         <!-- Windows Tab -->
-        <div id="tab-windows" class="tab-pane">
-          <h3 style="margin-bottom: 12px;">نصب و اجرای آسان در ویندوز:</h3>
+        <div id="tab-windows" class="tab-pane active">
+          <h3 style="margin-bottom: 12px;">نصب ۱-خطی در ویندوز (PowerShell):</h3>
           <div class="code-box">
             <button class="copy-btn" onclick="copyCode(this)">کپی</button>
-            <code>git clone https://github.com/m4tinbeigi-official/antigravity-account-switcher.git; cd antigravity-account-switcher; .\install.bat</code>
+            <code>irm https://raw.githubusercontent.com/mad-helpers/antigravity-account-switcher/main/install.ps1 | iex</code>
           </div>
           <p style="color: var(--text-muted); font-size: 0.95rem;">
-            ✓ سازگار با ویندوز ۱۰ و ۱۱. اتصال مستقیم به Windows Credential Manager بدون نیاز به پکیج‌های اضافی.
+            ✓ ثبت خودکار دیمن همگام‌ساز، پلاگین بومی Sidecar، فونت‌های آفلاین، شورتکات <code>--remote-debugging-port=0</code> و دستورات <code>agy-quota</code> و <code>agy-switch --doctor</code>.
+          </p>
+        </div>
+
+        <!-- macOS & Linux Tab -->
+        <div id="tab-mac" class="tab-pane">
+          <h3 style="margin-bottom: 12px;">نصب ۱-خطی در مک و لینوکس (Bash):</h3>
+          <div class="code-box">
+            <button class="copy-btn" onclick="copyCode(this)">کپی</button>
+            <code>curl -fsSL https://raw.githubusercontent.com/mad-helpers/antigravity-account-switcher/main/install.sh | bash</code>
+          </div>
+          <p style="color: var(--text-muted); font-size: 0.95rem;">
+            ✓ پشتیبانی از Apple Silicon/Intel در مک (اپلیکیشن <b>AntigravitySwitcher.app</b> + LaunchAgent) و لینوکس (Desktop Entry + systemd user service).
           </p>
         </div>
       </section>
 
       <section class="features-grid">
         <div class="feature-card">
-          <div class="feature-icon">⚡️</div>
-          <h3>سوئیچ با یک کلیک</h3>
-          <p>نیازی به ورود مجدد به مرورگر نیست. توکن‌های امن جابه‌جا شده و برنامه در کسری از ثانیه با اکانت جدید باز می‌شود.</p>
+          <div class="feature-icon">📊</div>
+          <h3>پایش زنده ۶ استخر مدل (v3.0)</h3>
+          <p>تله‌متری لحظه‌ای برای Gemini 4 Hydrogen، Gemini 4 Argon، Gemini 4 Carbon &amp; Orchestrator، Gemini 3.8 Flash، Claude 4.6 و GPT-OSS 120B به همراه تشخیص عدم تطابق نشست (Session Mismatch).</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">🔒</div>
-          <h3>امنیت ۱۰۰٪ آفلاین</h3>
-          <p>اطلاعات هرگز به سروری ارسال نمی‌شوند. توکن‌ها مستقیماً داخل macOS Keychain و Windows Credential Manager سیستم خودتان نگهداری می‌شوند.</p>
+          <div class="feature-icon">✍️</div>
+          <h3>Smart RTL v3 و فونت آفلاین</h3>
+          <p>راست‌چین خودکار پاراگراف‌ها در حین استریم مدل، اصلاح کلید Shift+2 برای درج @ در کیبورد فارسی و فونت‌های باندل‌شده Vazirmatn، Estedad و Outfit.</p>
         </div>
         <div class="feature-card">
-          <div class="feature-icon">🚀</div>
-          <h3>پشتیبانی دوال نیتیو</h3>
-          <p>نسخه مک به صورت Universal 2 (پشتیبانی همزمان چیپ‌های سری M اپل و پردازنده‌های اینتل) و نسخه ویندوز به صورت نیتیو اجرا می‌شوند.</p>
+          <div class="feature-icon">🧩</div>
+          <h3>پلاگین بومی Sidecar و ۵ ابزار MCP</h3>
+          <p>دارای پنل جانبی Account &amp; Quota Hub داخل ادیتور، دستور عیب‌یاب <code>agy-switch --doctor</code> و ۵ ابزار استاندارد MCP برای ایجنت‌ها.</p>
         </div>
       </section>
 
       <section class="author-banner">
         <h3>از این پروژه خوشتون اومد؟ ⭐</h3>
         <p>حمایت شما با دادن ستاره (Star) به این ریپازیتوری در گیت‌هاب باعث انگیزه بیشتر برای توسعه ابزارهای متن‌باز بعدی است!</p>
-        <a href="https://github.com/m4tinbeigi-official/antigravity-account-switcher" target="_blank" class="btn-star" style="display: inline-flex;">
+        <a href="https://github.com/mad-helpers/antigravity-account-switcher" target="_blank" class="btn-star" style="display: inline-flex;">
           ⭐ دادن ستاره به پروژه در گیت‌هاب
         </a>
       </section>
     </main>
 
-
-      <section style="background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 20px; padding: 2.5rem; text-align: center; margin: 3rem 0; box-shadow: 0 10px 30px rgba(0,0,0,0.3);">
-        <h2 style="font-size: 1.8rem; margin-bottom: 1rem; color: #fff;">🚀 به جامعه کاربران و توسعه‌دهندگان آنتی‌گرویتی بپیوندید</h2>
-        <p style="color: var(--text-muted); max-width: 600px; margin: 0 auto 1.5rem auto; font-size: 1rem;">
-          برای دریافت آخرین آپدیت‌ها، ترفندهای کاربردی، حل مشکلات و ارتباط مستقیم با توسعه‌دهندگان، در کانال و گروه تلگرام جامعه آنتی‌گرویتی عضو شوید.
-        </p>
-        <div style="display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
-          <a href="https://t.me/antigravity_iran" target="_blank" style="display: inline-flex; align-items: center; gap: 0.5rem; background: #0088cc; color: #fff; padding: 0.8rem 1.8rem; border-radius: 12px; font-weight: 600; text-decoration: none; transition: transform 0.2s;">
-            📢 عضویت در کانال تلگرام (@antigravity_iran)
-          </a>
-          <a href="https://t.me/+Kq4Yl6UvpqEwMDJk" target="_blank" style="display: inline-flex; align-items: center; gap: 0.5rem; background: rgba(255,255,255,0.08); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); padding: 0.8rem 1.8rem; border-radius: 12px; font-weight: 600; text-decoration: none; transition: transform 0.2s;">
-            💬 درخواست عضویت در گروه گفت‌وگو
-          </a>
-        </div>
-      </section>
+    <section style="background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 20px; padding: 2.5rem; text-align: center; margin: 3rem 0; box-shadow: 0 10px 30px rgba(0,0,0,0.3);">
+      <h2 style="font-size: 1.8rem; margin-bottom: 1rem; color: #fff;">🚀 به جامعه کاربران و توسعه‌دهندگان آنتی‌گرویتی بپیوندید</h2>
+      <p style="color: var(--text-muted); max-width: 600px; margin: 0 auto 1.5rem auto; font-size: 1rem;">
+        برای دریافت آخرین آپدیت‌ها، ترفندهای کاربردی، حل مشکلات و ارتباط مستقیم با توسعه‌دهندگان، در کانال و گروه تلگرام جامعه آنتی‌گرویتی عضو شوید.
+      </p>
+      <div style="display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap;">
+        <a href="https://t.me/antigravity_iran" target="_blank" style="display: inline-flex; align-items: center; gap: 0.5rem; background: #0088cc; color: #fff; padding: 0.8rem 1.8rem; border-radius: 12px; font-weight: 600; text-decoration: none; transition: transform 0.2s;">
+          📢 عضویت در کانال تلگرام (@antigravity_iran)
+        </a>
+        <a href="https://t.me/+Kq4Yl6UvpqEwMDJk" target="_blank" style="display: inline-flex; align-items: center; gap: 0.5rem; background: rgba(255,255,255,0.08); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); padding: 0.8rem 1.8rem; border-radius: 12px; font-weight: 600; text-decoration: none; transition: transform 0.2s;">
+          💬 درخواست عضویت در گروه گفت‌وگو
+        </a>
+      </div>
+    </section>
 
     <footer>
-      <p>توسعه داده شده توسط <a href="https://github.com/m4tinbeigi-official" target="_blank">Rick Sanchez</a> برای جامعه توسعه‌دهندگان • تحت مجوز <a href="https://github.com/m4tinbeigi-official/antigravity-account-switcher/blob/master/LICENSE" target="_blank">MIT License</a></p>
+      <p>توسعه داده شده توسط <a href="https://github.com/mad-helpers" target="_blank">mad-helpers (Madgod-xyz &amp; Bombhub-apk)</a> • تحت مجوز <a href="https://github.com/mad-helpers/antigravity-account-switcher/blob/main/LICENSE" target="_blank">MIT License</a></p>
     </footer>
   </div>
 
@@ -468,13 +446,13 @@
     function switchTab(os) {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
       document.querySelectorAll('.tab-pane').forEach(p => p.classList.remove('active'));
-      
-      if (os === 'mac') {
+
+      if (os === 'windows') {
         document.querySelector('.tab-btn:nth-child(1)').classList.add('active');
-        document.getElementById('tab-mac').classList.add('active');
+        document.getElementById('tab-windows').classList.add('active');
       } else {
         document.querySelector('.tab-btn:nth-child(2)').classList.add('active');
-        document.getElementById('tab-windows').classList.add('active');
+        document.getElementById('tab-mac').classList.add('active');
       }
     }
 
