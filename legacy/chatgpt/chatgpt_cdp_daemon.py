@@ -80,7 +80,7 @@ def expected_codex_executable():
     global _codex_exe_cache
     cached, checked = _codex_exe_cache
     now = time.monotonic()
-    if now - checked < 60:
+    if checked > 0 and (now - checked) < 3600:
         return cached
     try:
         import subprocess
@@ -126,6 +126,12 @@ def codex_listener_matches(port, listeners, process_factory, current_user, curre
     return False
 
 def is_owned_codex_port(port):
+    try:
+        import socket
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=0.05):
+            pass
+    except Exception:
+        return False
     try:
         import psutil
         current = psutil.Process()

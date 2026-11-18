@@ -9,6 +9,7 @@ Runs in background and provides:
 """
 
 import asyncio
+import base64
 import json
 import os
 import shutil
@@ -199,6 +200,27 @@ def get_account_profile_data(account_email, manifest=None, force_refresh=False):
     return server.get_account_profile_data(account_email, manifest=manifest, force_refresh=force_refresh)
 
 
+_BUNDLED_FONT_DATA_CACHE: dict[str, str] | None = None
+
+
+def _load_bundled_font_data() -> dict[str, str]:
+    """Load bundled WOFF2 fonts once as Data URLs so Electron CSP or daemon restarts never break typography."""
+    global _BUNDLED_FONT_DATA_CACHE
+    if _BUNDLED_FONT_DATA_CACHE is not None:
+        return _BUNDLED_FONT_DATA_CACHE
+    out: dict[str, str] = {}
+    for family, fname in (("Vazirmatn", "Vazirmatn[wght].woff2"), ("Estedad", "Estedad[wght].woff2"), ("Outfit", "Outfit[wght].woff2")):
+        fp, _mime = store.resolve_font_asset(fname)
+        if fp is not None and fp.is_file():
+            try:
+                b64 = base64.b64encode(fp.read_bytes()).decode("ascii")
+                out[family] = f"data:font/woff2;base64,{b64}"
+            except Exception:
+                pass
+    _BUNDLED_FONT_DATA_CACHE = out
+    return out
+
+
 def get_injector_script(usage=None, instance_id="instance_1", account_email=None) -> str:
     if not INJECTOR_PATH.exists():
         return ""
@@ -254,6 +276,7 @@ def get_injector_script(usage=None, instance_id="instance_1", account_email=None
             load_user_settings(instance_id=instance_id, account_email=actual_account),
             ensure_ascii=False,
         )
+        font_data_json = json.dumps(_load_bundled_font_data(), ensure_ascii=False)
 
         return (
             "(() => {\n"
@@ -262,6 +285,7 @@ def get_injector_script(usage=None, instance_id="instance_1", account_email=None
             f"  window.__antigravity_quota = {usage_json};\n"
             f"  window.__antigravity_accounts = {accounts_payload};\n"
             f"  window.__antigravity_user_settings = {user_settings_json};\n"
+            f"  window.__antigravity_font_data = {font_data_json};\n"
             "  try {\n"
             "    const __s = window.__antigravity_user_settings || {};\n"
             "    if (__s.theme) localStorage.setItem('antigravity:quota_theme', __s.theme);\n"

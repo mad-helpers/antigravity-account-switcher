@@ -1,4 +1,15 @@
-  // Local-first bundled WOFF2 fonts; external webfonts load lazily only on explicit selection.
+  // Local-first bundled WOFF2 fonts (CSP-proof inline Data URL -> local -> daemon); external webfonts load lazily only on selection.
+  const bundledFontData = (typeof window !== 'undefined' && window.__antigravity_font_data) || {};
+  const bundledFontSrc = (family, fileName) => {
+    const parts = [];
+    if (bundledFontData && typeof bundledFontData[family] === 'string' && bundledFontData[family].startsWith('data:')) {
+      parts.push(`url("${bundledFontData[family]}") format("woff2")`);
+    }
+    parts.push(`local('${family}')`);
+    parts.push(`url("http://127.0.0.1:39281/fonts/${fileName}") format("woff2")`);
+    return parts.join(', ');
+  };
+
   let localFontsStyle = document.getElementById('aqm-local-fonts');
   if (!localFontsStyle) {
     localFontsStyle = document.createElement('style');
@@ -11,23 +22,34 @@
       font-style: normal;
       font-weight: 100 900;
       font-display: swap;
-      src: local('Vazirmatn'), url("http://127.0.0.1:39281/fonts/Vazirmatn[wght].woff2") format("woff2");
+      src: ${bundledFontSrc('Vazirmatn', 'Vazirmatn[wght].woff2')};
     }
     @font-face {
       font-family: 'Estedad';
       font-style: normal;
       font-weight: 100 900;
       font-display: swap;
-      src: local('Estedad'), url("http://127.0.0.1:39281/fonts/Estedad[wght].woff2") format("woff2");
+      src: ${bundledFontSrc('Estedad', 'Estedad[wght].woff2')};
     }
     @font-face {
       font-family: 'Outfit';
       font-style: normal;
       font-weight: 100 900;
       font-display: swap;
-      src: local('Outfit'), url("http://127.0.0.1:39281/fonts/Outfit[wght].woff2") format("woff2");
+      src: ${bundledFontSrc('Outfit', 'Outfit[wght].woff2')};
     }
   `;
+  try {
+    if (typeof FontFace !== 'undefined' && document.fonts) {
+      ['Vazirmatn', 'Estedad', 'Outfit'].forEach((fam) => {
+        const uri = bundledFontData && bundledFontData[fam];
+        if (typeof uri === 'string' && uri.startsWith('data:')) {
+          const ff = new FontFace(fam, `url("${uri}")`, { weight: '100 900', style: 'normal' });
+          ff.load().then((loaded) => document.fonts.add(loaded)).catch(() => {});
+        }
+      });
+    }
+  } catch (e) {}
 
   const LAZY_WEBFONT_URLS = {
     'Sahel': 'https://cdn.jsdelivr.net/gh/rastikerdar/sahel-font@v3.4.0/dist/font-face.css',

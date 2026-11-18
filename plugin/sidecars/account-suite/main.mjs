@@ -326,9 +326,45 @@ export async function serveFontHandler(rawFontName, deps = {}) {
   return notFound();
 }
 
+export function buildEmbeddedFontsCss(fontDirs = DEFAULT_FONT_DIRS) {
+  const families = [
+    ['Vazirmatn', 'Vazirmatn[wght].woff2'],
+    ['Estedad', 'Estedad[wght].woff2'],
+    ['Outfit', 'Outfit[wght].woff2'],
+  ];
+  return families
+    .map(([family, fileName]) => {
+      const hit = findLocalFont(fileName, fontDirs);
+      const srcs = [`local('${family}')`];
+      if (hit) {
+        try {
+          const b64 = readFileSync(hit.path).toString('base64');
+          srcs.unshift(`url("data:font/woff2;base64,${b64}") format("woff2")`);
+        } catch (_) {}
+      }
+      srcs.push(`url("./fonts/${fileName}") format("woff2")`);
+      return `@font-face {\n  font-family: '${family}';\n  font-style: normal;\n  font-weight: 100 900;\n  font-display: swap;\n  src: ${srcs.join(', ')};\n}`;
+    })
+    .join('\n');
+}
+
 export function registerSidecarRoutes(app, deps = {}) {
   const ResponseImpl = deps.ResponseImpl || MockResponse;
   const indexHtmlPath = deps.indexHtmlPath || join(HERE, 'index.html');
+  const fontDirs = deps.fontDirs || DEFAULT_FONT_DIRS;
+  let cachedFontsCss = null;
+
+  const serveFontsCss = () => {
+    if (cachedFontsCss === null) cachedFontsCss = buildEmbeddedFontsCss(fontDirs);
+    return new ResponseImpl(cachedFontsCss, {
+      status: 200,
+      contentType: 'text/css; charset=utf-8',
+      headers: {
+        'Content-Type': 'text/css; charset=utf-8',
+        'Cache-Control': 'public, max-age=3600',
+      },
+    });
+  };
 
   const serveRoot = () => {
     const html = readFileSync(indexHtmlPath, 'utf8');
@@ -346,6 +382,8 @@ export function registerSidecarRoutes(app, deps = {}) {
   app.page('/index.html', serveRoot);
   app.page('/account-suite/', serveRoot);
   app.page('/account-suite/index.html', serveRoot);
+  app.page('/fonts.css', serveFontsCss);
+  app.page('/account-suite/fonts.css', serveFontsCss);
 
   for (const fontFile of BUNDLED_FONT_FILES) {
     const encoded = encodeURIComponent(fontFile);
@@ -478,7 +516,12 @@ async function runSelfTests() {
   assert.equal(healthRes.status, 'ok');
   assert.equal(healthRes.version, '3.0.0');
 
-  // 3. URL-encoded & plain [wght] font 200 OK
+  // 3. URL-encoded & plain [wght] font 200 OK + embedded fonts.css
+  const fontsCss = mockApp.pages.get('/fonts.css')();
+  assert.equal(fontsCss.status, 200);
+  assert.ok(String(fontsCss.body).includes("font-family: 'Vazirmatn'"));
+  assert.ok(String(fontsCss.body).includes('data:font/woff2;base64,'));
+
   const fontPlain = await mockApp.pages.get('/fonts/Vazirmatn[wght].woff2')();
   assert.equal(fontPlain.status, 200);
   assert.equal(fontPlain.headers['Content-Type'], 'font/woff2');

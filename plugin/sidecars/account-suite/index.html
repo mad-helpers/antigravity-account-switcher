@@ -4,6 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Account &amp; Quota Hub</title>
+  <script src="/preload.js"></script>
+  <link rel="stylesheet" href="fonts.css" />
   <style>
     @font-face {
       font-family: 'Vazirmatn';
@@ -439,17 +441,31 @@
         toastTimer = setTimeout(() => el.classList.remove('show'), 3200);
       }
 
+      function apiRel(path) {
+        return String(path || '').replace(/^\/+/, '');
+      }
+
       async function getJson(path) {
+        const rel = apiRel(path);
         const opts = { method: 'GET', headers: { Accept: 'application/json' } };
-        try {
-          const r = await fetch(path, opts);
-          if (r.ok) return await r.json();
-        } catch (_) {}
+        if (window.sidecar && typeof window.sidecar.fetch === 'function') {
+          try {
+            const r = await window.sidecar.fetch(rel, opts);
+            if (r.ok) return await r.json();
+          } catch (_) {}
+        }
+        for (const candidate of [rel, path]) {
+          try {
+            const r = await fetch(candidate, opts);
+            if (r.ok) return await r.json();
+          } catch (_) {}
+        }
         const direct = await fetch(`http://127.0.0.1:39281${path}`, opts);
         return await direct.json();
       }
 
       async function postJson(url, bodyObj = {}) {
+        const rel = apiRel(url);
         const opts = {
           method: 'POST',
           headers: {
@@ -458,10 +474,20 @@
           },
           body: JSON.stringify(bodyObj || {}),
         };
-        try {
-          const r = await fetch(url, opts);
-          if (r.ok) return await r.json();
-        } catch (_) {}
+        if (window.sidecar && typeof window.sidecar.fetch === 'function') {
+          try {
+            const r = await window.sidecar.fetch(rel, opts);
+            const data = await r.json().catch(() => ({}));
+            if (r.ok) return data;
+            if (r.status && r.status !== 404) return { success: false, error: data.error || `HTTP ${r.status}` };
+          } catch (_) {}
+        }
+        for (const candidate of [rel, url]) {
+          try {
+            const r = await fetch(candidate, opts);
+            if (r.ok) return await r.json();
+          } catch (_) {}
+        }
         const direct = await fetch(`http://127.0.0.1:39281${url}`, opts);
         return await direct.json();
       }
@@ -670,24 +696,27 @@
         const t = STRINGS[lang];
         btn.disabled = true;
         try {
+          let res = null;
           if (action === 'switch-fast') {
-            await postJson('/api/switch', { accountKey: email, noRestart: true });
-            showToast(t.switchedToast);
+            res = await postJson('/api/switch', { accountKey: email, noRestart: true });
+            showToast(res && res.success === false ? (res.error || 'Switch failed') : t.switchedToast);
             await refreshState();
           } else if (action === 'switch-restart') {
-            await postJson('/api/switch', { accountKey: email, noRestart: false });
-            showToast(t.restartingToast);
+            res = await postJson('/api/switch', { accountKey: email, noRestart: false });
+            showToast(res && res.success === false ? (res.error || 'Switch failed') : t.restartingToast);
             await refreshState();
           } else if (action === 'restart-cdp') {
-            await postJson('/api/restart', {});
-            showToast(t.restartingToast);
+            res = await postJson('/api/restart', {});
+            showToast(res && res.success === false ? (res.error || 'Restart failed') : t.restartingToast);
           } else if (action === 'launch-dual') {
-            await postJson('/api/launch_dual', { accountKey: email });
-            showToast(t.launchingToast);
+            res = await postJson('/api/launch_dual', { accountKey: email });
+            showToast(res && res.success === false ? (res.error || 'Launch failed') : t.launchingToast);
           } else if (action === 'reauth') {
-            await postJson('/api/oauth_signin', { account: email, noRestart: true });
-            showToast(t.oauthToast);
+            res = await postJson('/api/oauth_signin', { account: email, noRestart: true });
+            showToast(res && res.success === false ? (res.error || 'OAuth failed') : t.oauthToast);
           }
+        } catch (err) {
+          showToast((err && err.message) || 'Action failed');
         } finally {
           btn.disabled = false;
         }

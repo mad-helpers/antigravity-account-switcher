@@ -494,6 +494,17 @@ def test_daemon_low_cpu_cdp_filter_and_recovery_guards():
     with mock.patch.object(sync_daemon, "_is_daemon_http_healthy", return_value=True):
         sync_daemon._recover_unhealthy_daemon()
 
+    font_data = sync_daemon._load_bundled_font_data()
+    for family in ("Vazirmatn", "Estedad", "Outfit"):
+        assert family in font_data and font_data[family].startswith("data:font/woff2;base64,"), family
+
+    injector_js = (ROOT / "antigravity_quota_injector.js").read_text(encoding="utf-8")
+    assert "window.__antigravity_font_data" in injector_js
+
+    from legacy.chatgpt import chatgpt_cdp_daemon
+    with mock.patch.object(chatgpt_cdp_daemon, "expected_codex_executable", side_effect=AssertionError("should not probe closed port")):
+        assert chatgpt_cdp_daemon.is_owned_codex_port(59997) is False
+
 
 if __name__ == "__main__":
     test_install_ps1_pure_ascii_no_bom_and_wrapped()
