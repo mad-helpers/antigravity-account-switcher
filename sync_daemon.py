@@ -450,6 +450,8 @@ class QuotaHttpHandler(BaseHTTPRequestHandler):
                 cdp_connected_override=True if has_cdp else None,
                 sync_quota_fn=_http_sync_quota,
             )
+        except (ConnectionAbortedError, BrokenPipeError, ConnectionResetError):
+            return
         except Exception as e:
             log(f"[HTTP GET ERROR] {e!r}")
             try:
@@ -1197,6 +1199,7 @@ def start_optional_theme_service(config_path=None) -> None:
 
 
 def daemon_loop() -> None:
+    os.environ.pop("ELECTRON_RUN_AS_NODE", None)
     owner_lock = acquire_daemon_lock()
     if owner_lock is None and "--recover-stale" in sys.argv:
         _recover_unhealthy_daemon()

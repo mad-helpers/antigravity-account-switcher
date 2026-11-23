@@ -13,6 +13,7 @@ import datetime
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -88,7 +89,38 @@ _LOOPBACK_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 _STATE_CACHE_LOCK = threading.Lock()
 _ACTIVE_QUOTA_CACHE: dict[str, dict] = {}
-_ACTIVE_QUOTA_TTL = 15.0
+_ACTIVE_QUOTA_TTL = 45.0
+_QUOTA_REFRESH_IN_FLIGHT: set[str] = set()
+
+_STRIPPED_LAUNCH_ENV_EXACT = frozenset({
+    "ELECTRON_RUN_AS_NODE",
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "AGY_REQUIRE_AUTHENTICATED_UI_BOOTSTRAP",
+    "AGY_BROWSER_ACTIVE_PORT_FILE",
+})
+_STRIPPED_LAUNCH_ENV_PREFIXES = (
+    "ANTIGRAVITY_CSRF_",
+    "ANTIGRAVITY_LS_",
+    "ANTIGRAVITY_SIDECAR_",
+    "ANTIGRAVITY_PROJECT_",
+    "ANTIGRAVITY_SOURCE_",
+    "ANTIGRAVITY_EXECUTABLE_",
+    "ANTIGRAVITY_AGENTAPI_",
+    "ANTIGRAVITY_APP_DATA_",
+    "ANTIGRAVITY_NODE_",
+)
+
+
+def _clean_launch_env(base_env: dict | None = None) -> dict[str, str]:
+    """Return a clean env dict stripping Electron/Node sidecar vars (prevents Antigravity.exe running as Node)."""
+    src = os.environ if base_env is None else base_env
+    return {
+        k: v
+        for k, v in src.items()
+        if k.upper() not in _STRIPPED_LAUNCH_ENV_EXACT
+        and not k.upper().startswith(_STRIPPED_LAUNCH_ENV_PREFIXES)
+    }
 
 _DEVTOOLS_CACHE_LOCK = threading.Lock()
 _DEVTOOLS_TARGETS_CACHE: dict = {"data": None, "time": 0.0}
@@ -262,6 +294,7 @@ def ensure_daemon_running() -> bool:
             subprocess.Popen(
                 [py_exe, str(daemon_script), "--recover-stale"],
                 cwd=str(bin_dir if bin_dir.exists() else daemon_script.parent),
+                env=_clean_launch_env(),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=0x08000000,
@@ -275,6 +308,7 @@ def ensure_daemon_running() -> bool:
         subprocess.Popen(
             [sys.executable, str(daemon_script), "--recover-stale"],
             cwd=str(bin_dir if bin_dir.exists() else daemon_script.parent),
+            env=_clean_launch_env(),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
@@ -507,6 +541,21 @@ def restart_antigravity(force=False):
                     except Exception:
                         pass
 
+            # Clean up sidecar hosts spawned by the closed primary instance so they do not orphan.
+            owned_pids = {p.pid for p in mains + engines}
+            if owned_pids:
+                for proc in psutil.process_iter(["pid", "name", "ppid", "cmdline"]):
+                    try:
+                        info = proc.info
+                        if (info.get("name") or "").lower() != "antigravity.exe":
+                            continue
+                        if info.get("ppid") not in owned_pids:
+                            continue
+                        if any(str(a).startswith("--import") for a in (info.get("cmdline") or [])):
+                            proc.terminate()
+                    except Exception:
+                        continue
+
             for stale_name in ("DevToolsActivePort", "SingletonLock"):
                 stale_file = os.path.join(primary_data, stale_name)
                 if os.path.exists(stale_file):
@@ -520,14 +569,14 @@ def restart_antigravity(force=False):
             invalidate_state_caches()
             time.sleep(0.5)
 
-            env = dict(os.environ)
+            env = _clean_launch_env()
             env.setdefault("GOMEMLIMIT", "3GiB")
             env.setdefault("GOGC", "50")
             si = subprocess.STARTUPINFO()
             si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             si.wShowWindow = 1
             si.lpDesktop = r"WinSta0\Default"
-            subprocess.Popen(
+            proc = subprocess.Popen(
                 [exe, "--remote-debugging-port=0"],
                 cwd=os.path.dirname(exe),
                 env=env,
@@ -535,6 +584,11 @@ def restart_antigravity(force=False):
                 creationflags=0x00000200,
                 close_fds=True,
             )
+            time.sleep(0.4)
+            exit_code = proc.poll()
+            if exit_code not in (None, 0):
+                print(f"[RESTART] Relaunched {exe} exited immediately with code {exit_code}.", flush=True)
+                return False
             print(f"[RESTART] Launched {exe} cleanly with --remote-debugging-port=0.", flush=True)
             return True
         except Exception as error:
@@ -553,7 +607,7 @@ def restart_antigravity(force=False):
             _reapply_active_account()
             quota.invalidate_ls_cache("instance_1")
             invalidate_state_caches()
-            subprocess.Popen(["open", "/Applications/Antigravity.app", "--args", "--remote-debugging-port=0"])
+            subprocess.Popen(["open", "/Applications/Antigravity.app", "--args", "--remote-debugging-port=0"], env=_clean_launch_env())
             return True
         except Exception as error:
             print(f"[RESTART] macOS restart failed: {error!r}", flush=True)
@@ -946,7 +1000,7 @@ def launch_dual_instance(account_key, project_path=None):
             _dual_launch_in_progress = True
             write_token_to_credential_manager(target_token)
 
-            proc_env = os.environ.copy()
+            proc_env = _clean_launch_env()
             tok_str = target_token if isinstance(target_token, str) else json.dumps(target_token, ensure_ascii=False)
             proc_env["ANTIGRAVITY_TOKEN"] = tok_str
             proc_env["ANTIGRAVITY_ACCOUNT"] = account_key
@@ -1759,6 +1813,25 @@ def _safe_allowed_convs(account: str) -> list[str]:
         return []
 
 
+def _schedule_quota_refresh(cache_key: str, account_email, instance_id: str = "instance_1") -> None:
+    """Refresh stale quota in a single background thread per key so /api/state stays <100ms."""
+    with _STATE_CACHE_LOCK:
+        if cache_key in _QUOTA_REFRESH_IN_FLIGHT:
+            return
+        _QUOTA_REFRESH_IN_FLIGHT.add(cache_key)
+
+    def _worker():
+        try:
+            get_account_profile_data(account_email, force_refresh=True, instance_id=instance_id)
+        except Exception:
+            pass
+        finally:
+            with _STATE_CACHE_LOCK:
+                _QUOTA_REFRESH_IN_FLIGHT.discard(cache_key)
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 def get_account_profile_data(account_email, manifest=None, force_refresh=False, instance_id="instance_1"):
     """Fetch 6-pool profile/quota payload for an account with short-lived caching and zero token leaks."""
     if manifest is None:
@@ -1770,26 +1843,35 @@ def get_account_profile_data(account_email, manifest=None, force_refresh=False, 
 
     resolved = store.resolve_account_key(target, manifest) if target else None
     cache_key = str((resolved or target or "default")).lower().strip()
+    stale_cached = None
 
     if not force_refresh:
         with _STATE_CACHE_LOCK:
             cached = _ACTIVE_QUOTA_CACHE.get(cache_key)
-            if cached and (time.time() - cached.get("time", 0.0)) < _ACTIVE_QUOTA_TTL:
-                return dict(cached["data"])
+            if cached:
+                if (time.time() - cached.get("time", 0.0)) < _ACTIVE_QUOTA_TTL:
+                    return dict(cached["data"])
+                stale_cached = dict(cached["data"])
 
         if vault._normalize_instance_id(instance_id) == "instance_1" and target:
             aq_path = vault.get_platform_paths("instance_1")["active_quota_path"]
             if aq_path.is_file():
                 try:
                     age = time.time() - aq_path.stat().st_mtime
-                    if age < _ACTIVE_QUOTA_TTL:
-                        aq_data = json.loads(aq_path.read_text(encoding="utf-8"))
-                        if isinstance(aq_data, dict) and str(aq_data.get("email") or "").lower().strip() == target.lower() and aq_data.get("pools"):
+                    aq_data = json.loads(aq_path.read_text(encoding="utf-8"))
+                    if isinstance(aq_data, dict) and str(aq_data.get("email") or "").lower().strip() == target.lower() and aq_data.get("pools"):
+                        if age < _ACTIVE_QUOTA_TTL:
                             with _STATE_CACHE_LOCK:
                                 _ACTIVE_QUOTA_CACHE[cache_key] = {"data": dict(aq_data), "time": time.time()}
                             return aq_data
+                        if stale_cached is None:
+                            stale_cached = aq_data
                 except Exception:
                     pass
+
+        if stale_cached is not None:
+            _schedule_quota_refresh(cache_key, account_email, instance_id=instance_id)
+            return stale_cached
 
     entry = manifest.get(resolved, {}) if resolved else {}
     if not force_refresh and isinstance(entry.get("quota"), dict) and entry["quota"].get("pools"):
@@ -1797,6 +1879,16 @@ def get_account_profile_data(account_email, manifest=None, force_refresh=False, 
         with _STATE_CACHE_LOCK:
             _ACTIVE_QUOTA_CACHE[cache_key] = {"data": dict(q_data), "time": time.time()}
         return q_data
+
+    # On non-forced reads with known manifest metadata, return immediately and refresh in background.
+    if not force_refresh and (resolved or (target and "@" in target)):
+        fallback = quota._manifest_fallback_quota(str(entry.get("email") or resolved or target), entry or {})
+        if entry.get("avatar") and not fallback.get("avatar"):
+            fallback["avatar"] = entry["avatar"]
+        with _STATE_CACHE_LOCK:
+            _ACTIVE_QUOTA_CACHE[cache_key] = {"data": dict(fallback), "time": time.time() - (_ACTIVE_QUOTA_TTL - 5.0)}
+        _schedule_quota_refresh(cache_key, account_email, instance_id=instance_id)
+        return fallback
 
     tok_str = store.read_account_token(resolved, manifest) if resolved else None
     q_data = None

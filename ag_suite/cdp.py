@@ -161,6 +161,34 @@ def discover_live_cdp_ports() -> dict[str, int]:
     return found
 
 
+def has_running_antigravity_process(instance_id: str | None = "instance_1") -> bool:
+    """Return True if a root Antigravity IDE process is running for the given instance."""
+    try:
+        import psutil
+    except ImportError:
+        return False
+
+    norm_inst = vault._normalize_instance_id(instance_id)
+    folder_needle = vault.normalize_instance_folder(norm_inst).lower()
+    for proc in psutil.process_iter(["pid", "name"]):
+        try:
+            name = (proc.info.get("name") or "").lower()
+            if "antigravity" not in name:
+                continue
+            cmd = proc.cmdline() or []
+            if any(str(a).startswith(("--type=", "--import")) for a in cmd):
+                continue
+            cmd_low = " ".join(str(a).lower() for a in cmd)
+            if norm_inst == "instance_1":
+                if "antigravity-instance" not in cmd_low:
+                    return True
+            elif folder_needle in cmd_low or norm_inst in cmd_low:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def heal_devtools_port_file(port_file_path: Path, live_port: int) -> bool:
     """Atomically repair DevToolsActivePort only if live_port exposes a real workbench target."""
     if not is_valid_cdp_port(live_port, require_workbench=True, timeout=0.2):

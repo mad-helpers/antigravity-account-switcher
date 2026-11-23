@@ -63,10 +63,40 @@ def test_restart_and_dual_launch_include_remote_debugging_flag():
     assert "--remote-debugging-port=0" in restart_src
     assert "--remote-debugging-port=0" in dual_src
     assert "discover_live_cdp_ports" in dual_src
+    assert "_clean_launch_env" in restart_src
+    assert "_clean_launch_env" in dual_src
+
+
+def test_clean_launch_env_strips_electron_run_as_node_and_sidecar_vars():
+    polluted = {
+        "PATH": "C:\\Windows",
+        "ELECTRON_RUN_AS_NODE": "1",
+        "NODE_OPTIONS": "--max-old-space-size=4096",
+        "NODE_PATH": "C:\\fake\\node_modules",
+        "AGY_REQUIRE_AUTHENTICATED_UI_BOOTSTRAP": "1",
+        "ANTIGRAVITY_CSRF_TOKEN": "csrf-secret",
+        "ANTIGRAVITY_LS_ADDRESS": "localhost:51622",
+        "ANTIGRAVITY_SIDECAR_UI_TOKEN": "ui-secret",
+        "USERPROFILE": "C:\\Users\\dev",
+    }
+    cleaned = server._clean_launch_env(polluted)
+    assert cleaned["PATH"] == "C:\\Windows"
+    assert cleaned["USERPROFILE"] == "C:\\Users\\dev"
+    for bad in (
+        "ELECTRON_RUN_AS_NODE",
+        "NODE_OPTIONS",
+        "NODE_PATH",
+        "AGY_REQUIRE_AUTHENTICATED_UI_BOOTSTRAP",
+        "ANTIGRAVITY_CSRF_TOKEN",
+        "ANTIGRAVITY_LS_ADDRESS",
+        "ANTIGRAVITY_SIDECAR_UI_TOKEN",
+    ):
+        assert bad not in cleaned, f"{bad} leaked into cleaned launch env"
 
 
 if __name__ == "__main__":
     test_wait_gone_reports_live_and_dead_processes()
     test_wait_gone_never_raises_on_real_antigravity_processes()
     test_restart_and_dual_launch_include_remote_debugging_flag()
+    test_clean_launch_env_strips_electron_run_as_node_and_sidecar_vars()
     print("ok")

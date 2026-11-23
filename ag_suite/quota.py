@@ -33,8 +33,9 @@ _LOOPBACK_HTTPS = urllib.request.build_opener(
 )
 
 _LS_LOCK = threading.Lock()
-_LS_CACHE = {"port": None, "csrf": None, "time": 0.0, "instance_id": None}
+_LS_CACHE = {"port": None, "csrf": None, "time": 0.0, "neg_time": 0.0, "instance_id": None}
 _LS_CACHE_TTL = 30.0
+_LS_NEG_CACHE_TTL = 5.0
 
 _AUTH_LOCK = threading.Lock()
 _AUTH_CACHE: dict[str, dict] = {}
@@ -88,7 +89,7 @@ def invalidate_ls_cache(instance_id: str | None = None) -> None:
     """Clear Language Server discovery cache."""
     with _LS_LOCK:
         if instance_id is None or _LS_CACHE.get("instance_id") == (instance_id or "default"):
-            _LS_CACHE.update({"port": None, "csrf": None, "time": 0.0, "instance_id": None})
+            _LS_CACHE.update({"port": None, "csrf": None, "time": 0.0, "neg_time": 0.0, "instance_id": None})
     with _AUTH_LOCK:
         _AUTH_CACHE.clear()
 
@@ -190,6 +191,60 @@ def _discover_ls_via_cdp(instance_id: str | None) -> tuple[int | None, str | Non
     return None, None
 
 
+def _discover_sidecar_csrf_candidates(psutil_mod) -> list[tuple[str, int | None]]:
+    """Read (ANTIGRAVITY_CSRF_TOKEN, ls_http_port) from active Antigravity 2.34+ sidecar hosts, newest first."""
+    raw: list[tuple[float, str, int | None]] = []
+    for proc in psutil_mod.process_iter(["pid", "name", "cmdline"]):
+        try:
+            pname = (proc.info.get("name") or "").lower()
+            if "antigravity" not in pname:
+                continue
+            cmdline = proc.info.get("cmdline") or []
+            if not any(str(a).startswith("--import") for a in cmdline):
+                continue
+            env = proc.environ()
+            csrf = str(env.get("ANTIGRAVITY_CSRF_TOKEN") or "").strip()
+            if not csrf:
+                continue
+            ls_port_hint = None
+            ls_addr = str(env.get("ANTIGRAVITY_LS_ADDRESS") or "").strip()
+            if ":" in ls_addr:
+                tail = ls_addr.rsplit(":", 1)[1].strip()
+                if tail.isdigit():
+                    ls_port_hint = int(tail)
+            try:
+                ctime = float(proc.create_time())
+            except Exception:
+                ctime = 0.0
+            raw.append((ctime, csrf, ls_port_hint))
+        except Exception:
+            continue
+
+    raw.sort(key=lambda item: item[0], reverse=True)
+    seen: set[tuple[str, int | None]] = set()
+    out: list[tuple[str, int | None]] = []
+    for _, csrf, hint in raw:
+        key = (csrf, hint)
+        if key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
+def _get_listening_loopback_ports(proc) -> list[int]:
+    net_fn = getattr(proc, "net_connections", None) or getattr(proc, "connections", None)
+    if not net_fn:
+        return []
+    ports: list[int] = []
+    for conn in net_fn(kind="tcp"):
+        if getattr(conn, "status", None) == "LISTEN" and getattr(conn, "laddr", None):
+            if conn.laddr.ip == "127.0.0.1" and int(conn.laddr.port) > 1024:
+                p_num = int(conn.laddr.port)
+                if p_num not in cdp.EXCLUDED_LOCAL_PORTS and p_num not in ports:
+                    ports.append(p_num)
+    return ports
+
+
 def _discover_ls_via_psutil(instance_id: str | None) -> tuple[int | None, str | None]:
     try:
         import psutil
@@ -200,6 +255,8 @@ def _discover_ls_via_psutil(instance_id: str | None) -> tuple[int | None, str | 
     folder_needle = vault.normalize_instance_folder(norm_inst).lower()
     matched_procs = []
     fallback_procs = []
+    no_csrf_matched = []
+    no_csrf_fallback = []
 
     for proc in psutil.process_iter(["pid", "name", "cmdline"]):
         try:
@@ -207,40 +264,52 @@ def _discover_ls_via_psutil(instance_id: str | None) -> tuple[int | None, str | 
             if "language_server" not in pname:
                 continue
             cmdline = proc.info.get("cmdline") or []
-            csrf = _extract_csrf_from_cmdline(cmdline)
-            if not csrf:
-                continue
             cmd_low = " ".join(str(x).lower() for x in cmdline)
-            if norm_inst == "instance_1":
-                if "antigravity-instance" not in cmd_low:
-                    matched_procs.append((proc, csrf))
-                else:
-                    fallback_procs.append((proc, csrf))
+            is_match = (
+                ("antigravity-instance" not in cmd_low)
+                if norm_inst == "instance_1"
+                else (folder_needle in cmd_low or norm_inst in cmd_low)
+            )
+            csrf = _extract_csrf_from_cmdline(cmdline)
+            if csrf:
+                (matched_procs if is_match else fallback_procs).append((proc, csrf))
             else:
-                if folder_needle in cmd_low or norm_inst in cmd_low:
-                    matched_procs.append((proc, csrf))
-                else:
-                    fallback_procs.append((proc, csrf))
+                (no_csrf_matched if is_match else no_csrf_fallback).append(proc)
         except Exception:
             continue
 
     for proc, csrf in matched_procs + fallback_procs:
         try:
-            net_fn = getattr(proc, "net_connections", None) or getattr(proc, "connections", None)
-            if not net_fn:
-                continue
-            ports = []
-            for conn in net_fn(kind="tcp"):
-                if getattr(conn, "status", None) == "LISTEN" and getattr(conn, "laddr", None):
-                    if conn.laddr.ip == "127.0.0.1" and int(conn.laddr.port) > 1024:
-                        p_num = int(conn.laddr.port)
-                        if p_num not in cdp.EXCLUDED_LOCAL_PORTS and p_num not in ports:
-                            ports.append(p_num)
-            for p_num in sorted(ports, reverse=True):
+            for p_num in sorted(_get_listening_loopback_ports(proc), reverse=True):
                 if _probe_ls_rpc_ready(p_num, csrf):
                     return p_num, csrf
         except Exception:
             continue
+
+    # Antigravity 2.34+ omits --csrf_token from language_server cmdline and passes it to sidecar env.
+    no_csrf_procs = no_csrf_matched + no_csrf_fallback
+    if no_csrf_procs:
+        candidates = _discover_sidecar_csrf_candidates(psutil)
+        for proc in no_csrf_procs:
+            try:
+                ports = _get_listening_loopback_ports(proc)
+                if not ports:
+                    continue
+                port_set = set(ports)
+                for csrf, hint in candidates:
+                    ordered: list[int] = []
+                    if hint is not None:
+                        for pref in (hint - 1, hint):
+                            if pref in port_set and pref not in ordered:
+                                ordered.append(pref)
+                    for p_num in sorted(ports):
+                        if p_num not in ordered:
+                            ordered.append(p_num)
+                    for p_num in ordered:
+                        if _probe_ls_rpc_ready(p_num, csrf):
+                            return p_num, csrf
+            except Exception:
+                continue
     return None, None
 
 
@@ -304,13 +373,20 @@ def discover_language_server(instance_id: str | None = None, use_cache: bool = T
     inst_key = str(instance_id or "default").strip() or "default"
     if use_cache:
         with _LS_LOCK:
+            now = time.time()
             if (
                 _LS_CACHE.get("port")
                 and _LS_CACHE.get("csrf")
                 and _LS_CACHE.get("instance_id") == inst_key
-                and (time.time() - _LS_CACHE.get("time", 0.0)) < _LS_CACHE_TTL
+                and (now - _LS_CACHE.get("time", 0.0)) < _LS_CACHE_TTL
             ):
                 return _LS_CACHE["port"], _LS_CACHE["csrf"]
+            if (
+                not _LS_CACHE.get("port")
+                and _LS_CACHE.get("instance_id") == inst_key
+                and (now - _LS_CACHE.get("neg_time", 0.0)) < _LS_NEG_CACHE_TTL
+            ):
+                return None, None
 
     ls_port, csrf = _discover_ls_via_cdp(instance_id)
     if not (ls_port and csrf):
@@ -323,8 +399,10 @@ def discover_language_server(instance_id: str | None = None, use_cache: bool = T
 
     if ls_port and csrf:
         with _LS_LOCK:
-            _LS_CACHE.update({"port": ls_port, "csrf": csrf, "time": time.time(), "instance_id": inst_key})
+            _LS_CACHE.update({"port": ls_port, "csrf": csrf, "time": time.time(), "neg_time": 0.0, "instance_id": inst_key})
         return ls_port, csrf
+    with _LS_LOCK:
+        _LS_CACHE.update({"port": None, "csrf": None, "time": 0.0, "neg_time": time.time(), "instance_id": inst_key})
     return None, None
 
 
@@ -420,7 +498,7 @@ def _classify_model_pool(model_id: str, display_name: str, rem: float, reset_tim
         return "Claude 4.6 (Opus & Sonnet)"
     if "gpt" in m_low or "gpt" in d_low:
         return "GPT-OSS 120B"
-    if "carbon" in m_low or "carbon" in d_low or "orchestrator" in m_low or "orchestrator" in d_low or "pro" in m_low:
+    if "carbon" in m_low or "carbon" in d_low or "neon" in m_low or "neon" in d_low or "orchestrator" in m_low or "orchestrator" in d_low or "pro" in m_low:
         return "Gemini 4 Carbon & Orchestrator"
     if "flash" in m_low or "flash" in d_low:
         if not reset_time and rem >= 1.0 and "preview" in m_low:
@@ -997,7 +1075,8 @@ def diagnose_suite(instance_id: str = "instance_1") -> dict:
     sanitized_accounts = store.sanitize_manifest_for_client()
     needs_reauth_count = sum(1 for entry in sanitized_accounts.values() if entry.get("needs_reauth"))
 
-    remote_debug_required = bool(auth_state["ls_online"] and not workbench_ready)
+    antigravity_running = bool(auth_state["ls_online"] or cdp.has_running_antigravity_process(instance_id))
+    remote_debug_required = bool(antigravity_running and not workbench_ready)
     issues: list[str] = []
     if auth_state["session_mismatch"]:
         issues.append(

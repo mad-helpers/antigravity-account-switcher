@@ -56,7 +56,7 @@ SCHEDULED_DIR = os.path.join(ANTIGRAVITY_DIR, 'scheduled')
 _META_CACHE_LOCK = threading.Lock()
 _PROJECTS_CACHE = {"data": None, "time": 0.0}
 _ALLOWED_CONVS_CACHE = {}
-_META_CACHE_TTL = 10.0
+_META_CACHE_TTL = 30.0
 
 
 def invalidate_migration_caches():
@@ -632,7 +632,21 @@ def list_conversations(account=None, project_id=None, include_titles=True):
     conv_profiles = manifest.get("conversation_profiles", {})
     db_meta = get_conversation_summaries_metadata()
     prim_acc = get_primary_account()
-    sec_acc = get_secondary_account().lower()
+    sec_acc_raw = get_secondary_account()
+    prim_low = prim_acc.lower()
+    sec_acc = sec_acc_raw.lower()
+
+    def _norm_fast(val):
+        if not val:
+            return ""
+        low = str(val).strip().lower()
+        if low in ("instance_1", "primary", "acc1") or (prim_low and low == prim_low):
+            return prim_low
+        if low in ("instance_2", "secondary", "acc2") or (sec_acc and low == sec_acc):
+            return sec_acc
+        return low
+
+    acc_filter_low = _norm_fast(account) if account else ""
 
     db_files = glob.glob(os.path.join(CONVERSATIONS_DIR, '*.db'))
     conversations = []
@@ -667,9 +681,8 @@ def list_conversations(account=None, project_id=None, include_titles=True):
             if project_id and c_pid != project_id:
                 continue
 
-            if account:
-                acc_clean = norm_account(account)
-                if not any(acc_clean.lower() == norm_account(a).lower() for a in assigned_accounts):
+            if acc_filter_low:
+                if not any(acc_filter_low == _norm_fast(a) for a in assigned_accounts):
                     continue
 
             title = c_meta.get("title") or (get_conversation_title(conv_id) if include_titles else f"Conversation {conv_id[:8]}")

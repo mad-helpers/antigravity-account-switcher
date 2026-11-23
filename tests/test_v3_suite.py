@@ -506,6 +506,81 @@ def test_daemon_low_cpu_cdp_filter_and_recovery_guards():
         assert chatgpt_cdp_daemon.is_owned_codex_port(59997) is False
 
 
+def test_ls_234_sidecar_csrf_discovery_and_doctor_no_cdp_flag():
+    class FakeAddr:
+        def __init__(self, ip, port):
+            self.ip = ip
+            self.port = port
+
+    class FakeConn:
+        def __init__(self, port):
+            self.status = "LISTEN"
+            self.laddr = FakeAddr("127.0.0.1", port)
+
+    class FakeProc:
+        def __init__(self, pid, name, cmdline, ports=(), env=None, ctime=100.0):
+            self.info = {"pid": pid, "name": name, "cmdline": cmdline}
+            self._cmdline = cmdline
+            self._ports = ports
+            self._env = env or {}
+            self._ctime = ctime
+
+        def cmdline(self):
+            return self._cmdline
+
+        def net_connections(self, kind="tcp"):
+            return [FakeConn(p) for p in self._ports]
+
+        def environ(self):
+            return dict(self._env)
+
+        def create_time(self):
+            return self._ctime
+
+    ls_proc = FakeProc(
+        201,
+        "language_server.exe",
+        ["language_server.exe", "--standalone", "--override_ide_version", "2.34.0", "--app_data_dir", "antigravity"],
+        ports=[51621, 51622],
+    )
+    old_sidecar = FakeProc(
+        202,
+        "Antigravity.exe",
+        ["Antigravity.exe", "--import=register_loader.js", "main.mjs"],
+        env={"ANTIGRAVITY_CSRF_TOKEN": "stale-token", "ANTIGRAVITY_LS_ADDRESS": "localhost:49999"},
+        ctime=100.0,
+    )
+    new_sidecar = FakeProc(
+        203,
+        "Antigravity.exe",
+        ["Antigravity.exe", "--import=register_loader.js", "main.mjs"],
+        env={"ANTIGRAVITY_CSRF_TOKEN": "fresh-234-token", "ANTIGRAVITY_LS_ADDRESS": "localhost:51622"},
+        ctime=200.0,
+    )
+    fake_psutil = type("FakePsutil", (), {"process_iter": staticmethod(lambda attrs=None: [ls_proc, old_sidecar, new_sidecar])})
+
+    with mock.patch.dict(sys.modules, {"psutil": fake_psutil}), \
+         mock.patch.object(quota, "_probe_ls_rpc_ready", side_effect=lambda p, c: (p == 51621 and c == "fresh-234-token")):
+        port, csrf = quota._discover_ls_via_psutil("instance_1")
+        assert (port, csrf) == (51621, "fresh-234-token")
+
+    assert quota._classify_model_pool("gemini-4-neon-high", "Gemini 4 Neon (High)", 0.84, None) == "Gemini 4 Carbon & Orchestrator"
+
+    # Doctor must report remote_debugging_flag_required=True when Antigravity runs without CDP even if ls_online is False
+    with mock.patch.object(quota, "get_live_ide_auth_state", return_value={
+             "ls_online": False, "ls_port": None, "live_ide_email": None,
+             "credential_email": "dev@example.com", "session_mismatch": False,
+         }), \
+         mock.patch.object(cdp, "has_running_antigravity_process", return_value=True), \
+         mock.patch.object(cdp, "discover_live_cdp_ports", return_value={}), \
+         mock.patch.object(cdp, "is_valid_cdp_port", return_value=False), \
+         mock.patch.object(cdp, "is_port_open", return_value=False):
+        diag = quota.diagnose_suite("instance_1")
+        assert diag["cdp"]["remote_debugging_flag_required"] is True
+        assert diag["ok"] is False
+        assert any("--remote-debugging-port=0" in msg for msg in diag["issues"])
+
+
 if __name__ == "__main__":
     test_install_ps1_pure_ascii_no_bom_and_wrapped()
     test_main_branch_urls_and_file_parities()
@@ -514,4 +589,5 @@ if __name__ == "__main__":
     test_rce_custom_command_blocked_and_http_firewall()
     test_sidecar_mcp_cli_and_ui_contracts()
     test_daemon_low_cpu_cdp_filter_and_recovery_guards()
+    test_ls_234_sidecar_csrf_discovery_and_doctor_no_cdp_flag()
     print("ALL V3 SUITE TESTS PASSED!")

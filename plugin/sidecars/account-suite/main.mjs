@@ -138,6 +138,37 @@ function resolveDaemonScript() {
   return candidates[0];
 }
 
+const STRIPPED_DAEMON_ENV_EXACT = new Set([
+  'ELECTRON_RUN_AS_NODE',
+  'NODE_OPTIONS',
+  'NODE_PATH',
+  'AGY_REQUIRE_AUTHENTICATED_UI_BOOTSTRAP',
+  'AGY_BROWSER_ACTIVE_PORT_FILE',
+]);
+
+const STRIPPED_DAEMON_ENV_PREFIXES = [
+  'ANTIGRAVITY_CSRF_',
+  'ANTIGRAVITY_LS_',
+  'ANTIGRAVITY_SIDECAR_',
+  'ANTIGRAVITY_PROJECT_',
+  'ANTIGRAVITY_SOURCE_',
+  'ANTIGRAVITY_EXECUTABLE_',
+  'ANTIGRAVITY_AGENTAPI_',
+  'ANTIGRAVITY_APP_DATA_',
+  'ANTIGRAVITY_NODE_',
+];
+
+export function buildCleanDaemonEnv(baseEnv = process.env) {
+  const cleaned = {};
+  for (const [k, v] of Object.entries(baseEnv || {})) {
+    const up = k.toUpperCase();
+    if (STRIPPED_DAEMON_ENV_EXACT.has(up)) continue;
+    if (STRIPPED_DAEMON_ENV_PREFIXES.some((p) => up.startsWith(p))) continue;
+    cleaned[k] = v;
+  }
+  return cleaned;
+}
+
 export async function ensureDaemonRunning(deps = {}) {
   const fetchImpl = deps.fetchImpl || fetch;
   if (deps.skipAutoStart) {
@@ -149,9 +180,11 @@ export async function ensureDaemonRunning(deps = {}) {
     daemonStartup = (async () => {
       try {
         const daemonScript = resolveDaemonScript();
+        const cleanEnv = buildCleanDaemonEnv(process.env);
         if (process.platform === 'win32') {
           try {
             const taskProc = spawn('schtasks.exe', ['/Run', '/TN', 'AntigravityQuotaMonitor'], {
+              env: cleanEnv,
               detached: true,
               stdio: 'ignore',
               windowsHide: true,
@@ -166,6 +199,7 @@ export async function ensureDaemonRunning(deps = {}) {
           if (existsSync(daemonScript)) {
             const child = spawn('pythonw.exe', [daemonScript, '--recover-stale'], {
               cwd: dirname(daemonScript),
+              env: cleanEnv,
               detached: true,
               stdio: 'ignore',
               windowsHide: true,
@@ -174,6 +208,7 @@ export async function ensureDaemonRunning(deps = {}) {
               try {
                 const fallback = spawn('python', [daemonScript, '--recover-stale'], {
                   cwd: dirname(daemonScript),
+                  env: cleanEnv,
                   detached: true,
                   stdio: 'ignore',
                   windowsHide: true,
@@ -187,6 +222,7 @@ export async function ensureDaemonRunning(deps = {}) {
         } else if (existsSync(daemonScript)) {
           const child = spawn('python3', [daemonScript, '--recover-stale'], {
             cwd: dirname(daemonScript),
+            env: cleanEnv,
             detached: true,
             stdio: 'ignore',
           });
@@ -194,6 +230,7 @@ export async function ensureDaemonRunning(deps = {}) {
             try {
               const fallback = spawn('python', [daemonScript, '--recover-stale'], {
                 cwd: dirname(daemonScript),
+                env: cleanEnv,
                 detached: true,
                 stdio: 'ignore',
               });
@@ -564,6 +601,22 @@ async function runSelfTests() {
   assert.equal(swCall.opts.headers['Content-Type'], 'application/json');
   assert.equal(POST_TIMEOUT_MS, 30000);
   assert.equal(GET_TIMEOUT_MS, 5000);
+
+  // 8. Clean daemon env strips ELECTRON_RUN_AS_NODE and sidecar ANTIGRAVITY_* vars
+  const cleanedEnv = buildCleanDaemonEnv({
+    PATH: '/usr/bin',
+    ELECTRON_RUN_AS_NODE: '1',
+    NODE_OPTIONS: '--inspect',
+    ANTIGRAVITY_CSRF_TOKEN: 'secret-csrf',
+    ANTIGRAVITY_LS_ADDRESS: 'localhost:51622',
+    ANTIGRAVITY_SIDECAR_UI_TOKEN: 'tok',
+  });
+  assert.equal(cleanedEnv.PATH, '/usr/bin');
+  assert.equal(cleanedEnv.ELECTRON_RUN_AS_NODE, undefined);
+  assert.equal(cleanedEnv.NODE_OPTIONS, undefined);
+  assert.equal(cleanedEnv.ANTIGRAVITY_CSRF_TOKEN, undefined);
+  assert.equal(cleanedEnv.ANTIGRAVITY_LS_ADDRESS, undefined);
+  assert.equal(cleanedEnv.ANTIGRAVITY_SIDECAR_UI_TOKEN, undefined);
 
   console.log('sidecar main.mjs self-tests passed.');
 }
