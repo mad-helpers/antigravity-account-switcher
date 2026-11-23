@@ -541,20 +541,36 @@ def restart_antigravity(force=False):
                     except Exception:
                         pass
 
-            # Clean up sidecar hosts spawned by the closed primary instance so they do not orphan.
+            # Clean up sidecar hosts (1-level or via cmd.exe agy-node wrapper) spawned by the closed primary instance.
             owned_pids = {p.pid for p in mains + engines}
             if owned_pids:
+                wrapper_pids = set()
+                wrapper_procs = []
+                sidecar_procs = []
                 for proc in psutil.process_iter(["pid", "name", "ppid", "cmdline"]):
                     try:
                         info = proc.info
-                        if (info.get("name") or "").lower() != "antigravity.exe":
-                            continue
-                        if info.get("ppid") not in owned_pids:
-                            continue
-                        if any(str(a).startswith("--import") for a in (info.get("cmdline") or [])):
-                            proc.terminate()
+                        pname = (info.get("name") or "").lower()
+                        cmd = info.get("cmdline") or []
+                        if pname == "cmd.exe" and info.get("ppid") in owned_pids and any("agy-node" in str(a).lower() for a in cmd):
+                            wrapper_pids.add(proc.pid)
+                            wrapper_procs.append(proc)
+                        elif pname == "antigravity.exe" and any(str(a).startswith("--import") for a in cmd):
+                            sidecar_procs.append((proc, info.get("ppid")))
                     except Exception:
                         continue
+                valid_parents = owned_pids | wrapper_pids
+                for proc, ppid in sidecar_procs:
+                    if ppid in valid_parents:
+                        try:
+                            proc.terminate()
+                        except Exception:
+                            pass
+                for proc in wrapper_procs:
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
 
             for stale_name in ("DevToolsActivePort", "SingletonLock"):
                 stale_file = os.path.join(primary_data, stale_name)
